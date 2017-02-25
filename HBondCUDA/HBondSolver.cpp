@@ -211,17 +211,17 @@ int main()
 
             for (int i = 0; i < gpudonortowater.size(); i++)
             {
-                fprintf(logger, "%i,%i\n", gpuproteindonor[gpudonortowater[i][0]].resid, gpuclosewaters[gpudonortowater[i][1]].resid);
+                fprintf(logger, "%i,%i\n", gpudonortowater[i][0], gpudonortowater[i][1]);
                 timeline[framesprocessed].push_back(vector<int>());
-                timeline[framesprocessed][i].push_back(gpuproteindonor[gpudonortowater[i][0]].resid);
-                timeline[framesprocessed][i].push_back(gpuclosewaters[gpudonortowater[i][1]].resid);
+                timeline[framesprocessed][i].push_back(gpudonortowater[i][0]);
+                timeline[framesprocessed][i].push_back(gpudonortowater[i][1]);
             }
             for (int i = 0; i < gpuacceptortowater.size(); i++)
             {
-                fprintf(logger, "%i,%i\n", gpuproteinacceptor[gpuacceptortowater[i][0]].resid, gpuclosewaters[gpuacceptortowater[i][1]].resid);
+                fprintf(logger, "%i,%i\n", gpuacceptortowater[i][0], gpuacceptortowater[i][1]);
                 timeline[framesprocessed].push_back(vector<int>());
-                timeline[framesprocessed][gpudonortowater.size() + i].push_back(gpuproteinacceptor[gpuacceptortowater[i][0]].resid);
-                timeline[framesprocessed][gpudonortowater.size() + i].push_back(gpuclosewaters[gpuacceptortowater[i][1]].resid);
+                timeline[framesprocessed][gpudonortowater.size() + i].push_back(gpuacceptortowater[i][0]);
+                timeline[framesprocessed][gpudonortowater.size() + i].push_back(gpuacceptortowater[i][1]);
             }
             
 

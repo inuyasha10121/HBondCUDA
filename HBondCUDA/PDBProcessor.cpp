@@ -81,6 +81,9 @@ vector<Atom> PDBProcessor::getAtomsFromPDB()
     {
         string line;
 
+        int residoffset = 0;
+        bool toggle = false;
+
         // read each line
         while (getline(pdbStream, line))
         {
@@ -126,7 +129,7 @@ vector<Atom> PDBProcessor::getAtomsFromPDB()
                 curAtom.altLoc = line.at(16);
                 curAtom.resName = trim(resName);
                 curAtom.chainID = line.at(21);
-                curAtom.resSeq = stoi(line.substr(22, 4));
+                curAtom.resSeq = stoi(line.substr(22, 4)) + residoffset;
                 curAtom.iCode = line.at(26);
                 curAtom.x = stof(line.substr(30, 8));
                 curAtom.y = stof(line.substr(38, 8));
@@ -135,6 +138,21 @@ vector<Atom> PDBProcessor::getAtomsFromPDB()
                 curAtom.tempFactor = stof(line.substr(60, 6));
                 curAtom.charge = trim(charge);
 
+                
+                if (((curAtom.resSeq % 10000) == 9999))
+                {
+                    if (toggle)
+                    {
+                        residoffset += 10000;
+                        toggle = false;
+                    }
+                    
+                }
+                else
+                {
+                    toggle = true;
+                }
+                
                 atoms.push_back(curAtom);
             }
         }
