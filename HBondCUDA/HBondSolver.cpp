@@ -18,11 +18,11 @@ using namespace std;
 
 string pdbpath = "E:\\CALB\\test.pdb";
 string hbondtablepath = "E:\\CALB\\HBondTableRev2.csv";
-string trajpath = "E:\\CALB\\noPBC_nvt.xtc";
+string trajpath = "E:\\CALB\\noPBC_nvt.trr";
 string outpath = "E:\\CALB\\hbondlog.txt";
 string csvpath = "E:\\CALB\\analysis.csv";
 string binoutpath = "E:\\CALB\\timeline.bin";
-int dt = 1000;
+int dt = 1;
 int hbondwindow = 5; //MUST BE ODD
 int windowthreshold = 4; //Inclusive
 
@@ -269,63 +269,7 @@ int main()
     printf("\n\nNumber waters involved in hydrogen bonding: %i\n", boundwaters.size());
     printf("Number AAs involved in hydrogen bonding: %i\n", boundAAs.size());
 
-    
-    //Make a better timeline
-    printf("\nGenerating better timeline in binary file...");
-    //Header: [# frames][# waters][# AAs][ind Waters...][ind AAs...], linear format
-    uint32_t *header = new uint32_t[3 + boundwaters.size() + boundAAs.size()];
-    header[0] = timeline.size();
-    header[1] = boundwaters.size();
-    header[2] = boundAAs.size();
-    for (int i = 0; i < boundwaters.size(); i++)
-    {
-        header[i + 3] = boundwaters[i];
-    }
-    for (int i = 0; i < boundAAs.size(); i++)
-    {
-        header[i + 3 + boundwaters.size()] = boundAAs[i];
-    }
-    fwrite(header, sizeof(uint32_t), 2 + boundwaters.size() + boundAAs.size(), binfile);
-    delete[] header;
-
-    //Frames: [Frame][Water][AA], 3D matrix format
-    auto matsize = boundAAs.size() * boundwaters.size();
-    uint8_t *bintimeline = new uint8_t[matsize];
-    for (int i = 0; i < timeline.size(); i++)
-    {
-        fill(bintimeline, bintimeline + matsize, false);
-        for (int j = 0; j < timeline[i].size(); j++)
-        {
-            auto xpos = find(boundAAs.begin(), boundAAs.end(), timeline[i][j][0]);
-            auto ypos = find(boundwaters.begin(), boundwaters.end(), timeline[i][j][1]);
-            if (xpos == boundAAs.end() || ypos == boundwaters.end())
-            {
-                printf("ERROR: Something went wrong writing the binary file.");
-                cin.get();
-                return 1;
-            }
-            auto x = xpos - boundAAs.begin();
-            auto y = ypos - boundwaters.begin();
-            bintimeline[(y * boundAAs.size()) + x] = true;
-        }
-        fwrite(bintimeline, sizeof(uint8_t), matsize, binfile);
-    }
-    delete[] bintimeline;
-    fclose(binfile);
-    printf("Done!\n");
-
-    //Start searching for interesting hydrogen bond features
-    printf("\nAnalyzing binary file for interesting hydrogen bond characteristics.\n");
-    FILE *readbin;
-    readbin = fopen(binpath, "rb");
-    if (readbin == NULL)
-    {
-        printf("Error: Binary file could not be opened for reading.");
-        std::cin.get();
-        return 1;
-    }
-    auto headeroffset = (3 + boundwaters.size() + boundAAs.size()) * sizeof(uint32_t);
-
+    //Start processing the timeline information
     FILE *csvout;
     char * csv = &csvpath[0];
     csvout = fopen(csv, "w");
@@ -336,14 +280,13 @@ int main()
         return 1;
     }
 
-
     //Water ID:, Bridger?:, Bulk?:, #AAs:, # Events:
-    fprintf(csvout, "Water ID:,Bridger?:,Bulk?:,# AAs:,# Events:");
+    fprintf(csvout, "Water ID:,Bridger?:,Bulk?:,# AAs:,# Events:\n");
 
-    bool buff[1];
     //Binding edges descibes how many transition events happened, which roughly quantifies how frequently the water participated in hbonding
     int *bindingedges = new int[boundAAs.size()]; //Odd is bound, even is unbound
     bool *bridger = new bool[boundwaters.size()]; //Stores if this water ever participated in bridging
+    fill(bridger, bridger + boundwaters.size(), false);
     int numbridgers = 0;
     int numbulk = 0;
     int numresident = 0;
@@ -362,9 +305,18 @@ int main()
                 int boundframes = 0;
                 for (int nwindow = 0; nwindow < hbondwindow; nwindow++)
                 {
+                    /*
                     fseek(readbin, headeroffset + (sizeof(uint8_t) * (nprot + (boundwaters.size() * (nwater + (timeline.size() * (nframe + nwindow)))))), SEEK_SET);
                     fread(buff, sizeof(uint8_t), 1, readbin);
+                    
                     boundframes += (bool)buff[0];
+                    */
+                    for (int nsearch = 0; nsearch < timeline[nframe + nwindow].size(); nsearch++)
+                    {
+                        boundframes += ((timeline[nframe + nwindow][nsearch][0] == boundAAs[nprot]) && (timeline[nframe + nwindow][nsearch][1] == boundwaters[nwater]));
+                    }
+
+
                 }       //Currently Bound                   //Previously Bound          //Currently Unbound                 //Previously Unbound
                 if (((boundframes >= windowthreshold) ^ (bindingedges[nprot] % 2)) || ((boundframes < windowthreshold) ^ !(bindingedges[nprot] % 2)))
                 {
@@ -407,14 +359,13 @@ int main()
             numbulk++;
         }
         //Water ID:, Bridger?:, Bulk?:, #AAs:, # Events:
-        fprintf(csvout, "%i,%d,%d,%i,%i\n", boundwaters[nwater], bridger, (numAAsparticipated > 1), numAAsparticipated, numevents);
+        fprintf(csvout, "%i,%s,%s,%i,%i\n", boundwaters[nwater], bridger ? "true" : "false", (numAAsparticipated > 1) ? "true" : "false", numAAsparticipated, numevents);
 
     }
     fprintf(csvout, "\n\nOVERALL RESULTS:\n# Bridgers,%i\n# Resident:,%i\n# Bulk:,%i", numbridgers, numresident, numbulk);
     delete[] bindingedges;
     delete[] bridger;
 
-    fclose(readbin);
     printf("\n\nDone with analysis!\n");
     fclose(csvout);
     fclose(logger);
