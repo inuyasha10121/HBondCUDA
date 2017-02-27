@@ -177,6 +177,7 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
     <ClInclude Include="CalculationMethods.h" />
     <ClInclude Include="CSVReader.h" />
     <ClInclude Include="GPUTypes.h" />
+    <ClInclude Include="helper_string.h" />
     <ClInclude Include="kernel.cuh" />
     <ClInclude Include="PDBProcessor.h" />
     <ClInclude Include="TrajectoryProcessor.h" />

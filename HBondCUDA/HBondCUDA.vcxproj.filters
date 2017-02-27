@@ -70,6 +70,7 @@
     <ClInclude Include="CalculationMethods.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="helper_string.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="vc140.pdb" />

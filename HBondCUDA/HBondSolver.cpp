@@ -10,18 +10,18 @@
 #include "xdrfile_trr.h"
 #include "xdrfile_xtc.h"
 
+#include "helper_string.h"
 #include "CalculationMethods.h"
 #include "PDBProcessor.h"
 #include "CSVReader.h"
 
 using namespace std;
 
-string pdbpath = "E:\\CALB\\test.pdb";
-string hbondtablepath = "E:\\CALB\\HBondTableRev2.csv";
-string trajpath = "E:\\CALB\\noPBC_nvt.trr";
-string outpath = "E:\\CALB\\hbondlog.txt";
-string csvpath = "E:\\CALB\\analysis.csv";
-string binoutpath = "E:\\CALB\\timeline.bin";
+char * pdbpath = "D:\\CALB\\test.pdb";
+char * hbondtablepath = "D:\\CALB\\HBondTableRev2.csv";
+char * trajpath = "D:\\CALB\\noPBC_nvt.trr";
+char * outpath = "D:\\CALB\\hbondlog.txt";
+char * csvpath = "D:\\CALB\\analysis.csv";
 int dt = 1;
 int hbondwindow = 5; //MUST BE ODD
 int windowthreshold = 4; //Inclusive
@@ -33,8 +33,133 @@ int index3d(int z, int y, int x, int xmax, int ymax)
 }
 
 
-int main()
+int main(int argc, char **argv)
 {   
+    //Command line arguements to make the code a bit more versatile
+    if (checkCmdLineFlag(argc, (const char **)argv, "help") ||
+        checkCmdLineFlag(argc, (const char **)argv, "h") ||
+        argc < 2)
+    {
+        cout << "Usage: " << argv[0] << " -pdb = PDB File Path (Required)" << endl;
+        cout << "      -hbt = Hydrogen Bond Lookup Table (Required)" << endl;
+        cout << "      -trj = Trajectory Path (Required)" << endl;
+        cout << "      -ol = Outpath for Hydrogen Bond Timeline File (Required)" << endl << endl;
+        cout << "      -oa = Outpath for Analysis CSV file (Required)" << endl;
+        cout << "      -dt = Frame skip parameter (Optional, Default 1)" << endl;
+        cout << "      -window = Window frame size for bond analysis (MUST BE ODD) (Optional, Default 5)" << endl;
+        cout << "      -wint = Window threshold for bond analysis (Optional, Default 4)" << endl;
+        cout << "      -analysisonly = Jumps to analysis of timeline file (Optional)" << endl << endl;
+
+        return 0;
+    }
+
+    if (checkCmdLineFlag(argc, (const char**)argv, "pdb"))
+    {
+        getCmdLineArgumentString(argc, (const char**)argv, "pdb", &pdbpath);
+    }
+    else
+    {
+        cout << "A pdb file (-pdb) MUST be specified." << endl;
+        cout << "Run \"" << argv[0] << " -help\" for more details." << endl;
+
+        return 1;
+    }
+
+    if (checkCmdLineFlag(argc, (const char**)argv, "hbt"))
+    {
+        getCmdLineArgumentString(argc, (const char**)argv, "hbt", &hbondtablepath);
+    }
+    else
+    {
+        cout << "A trajectory file (-hbt) MUST be specified." << endl;
+        cout << "Run \"" << argv[0] << " -help\" for more details." << endl;
+
+        return 1;
+    }
+
+    if (checkCmdLineFlag(argc, (const char**)argv, "trj"))
+    {
+        getCmdLineArgumentString(argc, (const char**)argv, "trj", &trajpath);
+    }
+    else
+    {
+        cout << "A trajectory file (-trj) MUST be specified." << endl;
+        cout << "Run \"" << argv[0] << " -help\" for more details." << endl;
+
+        return 1;
+    }
+
+    if (checkCmdLineFlag(argc, (const char**)argv, "ol"))
+    {
+        getCmdLineArgumentString(argc, (const char**)argv, "ol", &outpath);
+    }
+    else
+    {
+        cout << "An output log (-ol) file MUST be specified." << endl;
+        cout << "Run \"" << argv[0] << " -help\" for more details." << endl;
+
+        return 1;
+    }
+
+    if (checkCmdLineFlag(argc, (const char**)argv, "oa"))
+    {
+        getCmdLineArgumentString(argc, (const char**)argv, "oa", &csvpath);
+    }
+    else
+    {
+        cout << "An output analysis csv (-oa) file MUST be specified." << endl;
+        cout << "Run \"" << argv[0] << " -help\" for more details." << endl;
+
+        return 1;
+    }
+
+    if (checkCmdLineFlag(argc, (const char**)argv, "dt"))
+    {
+        dt = getCmdLineArgumentInt(argc, (const char**)argv, "dt");
+
+        if (dt < 0)
+        {
+            cout << "Error: dt must be a positive value." << endl;
+            cout << "Exiting..." << endl;
+
+            return 1;
+        }
+    }
+
+    if (checkCmdLineFlag(argc, (const char**)argv, "window"))
+    {
+        hbondwindow = getCmdLineArgumentInt(argc, (const char**)argv, "window");
+
+        if (dt < 0)
+        {
+            cout << "Error: window must be a positive value." << endl;
+            cout << "Exiting..." << endl;
+
+            return 1;
+        }
+
+        if (dt % 2 != 1)
+        {
+            cout << "Error: window must be an odd value." << endl;
+            cout << "Exiting..." << endl;
+
+            return 1;
+        }
+    }
+
+    if (checkCmdLineFlag(argc, (const char**)argv, "wint"))
+    {
+        windowthreshold = getCmdLineArgumentInt(argc, (const char**)argv, "wint");
+
+        if (dt < 0)
+        {
+            cout << "Error: wint must be a positive value." << endl;
+            cout << "Exiting..." << endl;
+
+            return 1;
+        }
+    }
+
     //Just some initial stuff we will need later
     PDBProcessor pdbprocessor(pdbpath);
     CSVReader csvreader(hbondtablepath);
@@ -65,7 +190,8 @@ int main()
 
     //Time to start processing the trajetory
     //First, determine what kind of file it is
-    auto extension = trajpath.substr(trajpath.find_last_of('.'), trajpath.length() - trajpath.find_last_of('.'));
+    string trjp(trajpath);
+    auto extension = trjp.substr(trjp.find_last_of('.'), trjp.length() - trjp.find_last_of('.'));
     if (extension != ".xtc" && extension != ".trr")
     {
         printf("ERROR: Trajectory file extension not recognized.  It must be a .xtc or .trr file! (Found %s)\n", extension.c_str());
@@ -76,13 +202,13 @@ int main()
 
     //Start the reading process
     XDRFILE *xd_read;
-    vector<char> treatedpath(trajpath.begin(), trajpath.end());
+    vector<char> treatedpath(trjp.begin(), trjp.end());
     treatedpath.push_back('\0');
 
     xd_read = xdrfile_open(&treatedpath[0], "r");
     if (xd_read == NULL)
     {
-        printf("ERROR: Could not open trajectory file for reading: %s\n", trajpath.c_str());
+        printf("ERROR: Could not open trajectory file for reading: %s\n", trjp.c_str());
         cin.get();
         return 1;
     }
@@ -121,17 +247,6 @@ int main()
     if (logger == NULL)
     {
         printf("Error: Log file could not be opened for writing.");
-        std::cin.get();
-        return 1;
-    }
-
-    //Setup binary file writer for later use
-    FILE *binfile;
-    char * binpath = &binoutpath[0];
-    binfile = fopen(binpath, "w");
-    if (binfile == NULL)
-    {
-        printf("Error: Binary file could not be opened for writing.");
         std::cin.get();
         return 1;
     }
@@ -284,9 +399,11 @@ int main()
     fprintf(csvout, "Water ID:,Bridger?:,Bulk?:,# AAs:,# Events:\n");
 
     //Binding edges descibes how many transition events happened, which roughly quantifies how frequently the water participated in hbonding
-    int *bindingedges = new int[boundAAs.size()]; //Odd is bound, even is unbound
-    bool *bridger = new bool[boundwaters.size()]; //Stores if this water ever participated in bridging
-    fill(bridger, bridger + boundwaters.size(), false);
+    vector<int> bindingedges;
+    bindingedges.resize(boundAAs.size());
+    vector<bool> bridger;
+    bridger.resize(boundwaters.size());
+    fill(bridger.begin(), bridger.end(), false);
     int numbridgers = 0;
     int numbulk = 0;
     int numresident = 0;
@@ -294,7 +411,7 @@ int main()
     {
         int numevents = 0;
         int numAAsparticipated = 0;
-        fill(bindingedges, bindingedges + boundAAs.size(), 0);
+        fill(bindingedges.begin(), bindingedges.end(), 0);
         printf("\rProcessing water %i of %i", nwater+1, boundwaters.size());
         for (int nframe = 0; nframe < timeline.size() - hbondwindow; nframe++)
         {
@@ -305,12 +422,6 @@ int main()
                 int boundframes = 0;
                 for (int nwindow = 0; nwindow < hbondwindow; nwindow++)
                 {
-                    /*
-                    fseek(readbin, headeroffset + (sizeof(uint8_t) * (nprot + (boundwaters.size() * (nwater + (timeline.size() * (nframe + nwindow)))))), SEEK_SET);
-                    fread(buff, sizeof(uint8_t), 1, readbin);
-                    
-                    boundframes += (bool)buff[0];
-                    */
                     for (int nsearch = 0; nsearch < timeline[nframe + nwindow].size(); nsearch++)
                     {
                         boundframes += ((timeline[nframe + nwindow][nsearch][0] == boundAAs[nprot]) && (timeline[nframe + nwindow][nsearch][1] == boundwaters[nwater]));
@@ -346,7 +457,7 @@ int main()
             }
         }
         
-        if (bridger)
+        if (bridger[nwater])
         {
             numbridgers++;
         }
@@ -359,12 +470,10 @@ int main()
             numbulk++;
         }
         //Water ID:, Bridger?:, Bulk?:, #AAs:, # Events:
-        fprintf(csvout, "%i,%s,%s,%i,%i\n", boundwaters[nwater], bridger ? "true" : "false", (numAAsparticipated > 1) ? "true" : "false", numAAsparticipated, numevents);
+        fprintf(csvout, "%i,%s,%s,%i,%i\n", boundwaters[nwater], bridger[nwater] ? "true" : "false", (numAAsparticipated > 1) ? "true" : "false", numAAsparticipated, numevents);
 
     }
     fprintf(csvout, "\n\nOVERALL RESULTS:\n# Bridgers,%i\n# Resident:,%i\n# Bulk:,%i", numbridgers, numresident, numbulk);
-    delete[] bindingedges;
-    delete[] bridger;
 
     printf("\n\nDone with analysis!\n");
     fclose(csvout);
