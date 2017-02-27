@@ -3,6 +3,7 @@
 #include <iostream>
 #include <stdlib.h>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <chrono>
 #include <algorithm>
@@ -32,6 +33,7 @@ int index3d(int z, int y, int x, int xmax, int ymax)
     return (z * xmax * ymax) + (y * xmax) + xmax;
 }
 
+int performTimelineAnalysis(char * logpath);
 
 int main(int argc, char **argv)
 {   
@@ -40,17 +42,46 @@ int main(int argc, char **argv)
         checkCmdLineFlag(argc, (const char **)argv, "h") ||
         argc < 2)
     {
-        cout << "Usage: " << argv[0] << " -pdb = PDB File Path (Required)" << endl;
-        cout << "      -hbt = Hydrogen Bond Lookup Table (Required)" << endl;
-        cout << "      -trj = Trajectory Path (Required)" << endl;
-        cout << "      -ol = Outpath for Hydrogen Bond Timeline File (Required)" << endl << endl;
-        cout << "      -oa = Outpath for Analysis CSV file (Required)" << endl;
+        cout << "Usage: " << argv[0] << " -pdb = PDB File Path (Required if not jumping directly to analysis)" << endl;
+        cout << "      -hbt = Hydrogen Bond Lookup Table (Required if not jumping directly to analysis)" << endl;
+        cout << "      -trj = Trajectory Path (Required if not jumping directly to analysis)" << endl;
+        cout << "      -ol = Outpath for Hydrogen Bond Timeline File (Required ALWAYS)" << endl << endl;
+        cout << "      -oa = Outpath for Analysis CSV file (Required ALWAYS)" << endl;
         cout << "      -dt = Frame skip parameter (Optional, Default 1)" << endl;
         cout << "      -window = Window frame size for bond analysis (MUST BE ODD) (Optional, Default 5)" << endl;
         cout << "      -wint = Window threshold for bond analysis (Optional, Default 4)" << endl;
         cout << "      -analysisonly = Jumps to analysis of timeline file (Optional)" << endl << endl;
 
         return 0;
+    }
+
+    if (checkCmdLineFlag(argc, (const char**)argv, "ol"))
+    {
+        getCmdLineArgumentString(argc, (const char**)argv, "ol", &outpath);
+    }
+    else
+    {
+        cout << "An output log (-ol) file MUST be specified." << endl;
+        cout << "Run \"" << argv[0] << " -help\" for more details." << endl;
+
+        return 1;
+    }
+
+    if (checkCmdLineFlag(argc, (const char**)argv, "oa"))
+    {
+        getCmdLineArgumentString(argc, (const char**)argv, "oa", &csvpath);
+    }
+    else
+    {
+        cout << "An output analysis csv (-oa) file MUST be specified." << endl;
+        cout << "Run \"" << argv[0] << " -help\" for more details." << endl;
+
+        return 1;
+    }
+
+    if (checkCmdLineFlag(argc, (const char**)argv, "analysisonly"))
+    {
+        return performTimelineAnalysis(outpath);
     }
 
     if (checkCmdLineFlag(argc, (const char**)argv, "pdb"))
@@ -84,30 +115,6 @@ int main(int argc, char **argv)
     else
     {
         cout << "A trajectory file (-trj) MUST be specified." << endl;
-        cout << "Run \"" << argv[0] << " -help\" for more details." << endl;
-
-        return 1;
-    }
-
-    if (checkCmdLineFlag(argc, (const char**)argv, "ol"))
-    {
-        getCmdLineArgumentString(argc, (const char**)argv, "ol", &outpath);
-    }
-    else
-    {
-        cout << "An output log (-ol) file MUST be specified." << endl;
-        cout << "Run \"" << argv[0] << " -help\" for more details." << endl;
-
-        return 1;
-    }
-
-    if (checkCmdLineFlag(argc, (const char**)argv, "oa"))
-    {
-        getCmdLineArgumentString(argc, (const char**)argv, "oa", &csvpath);
-    }
-    else
-    {
-        cout << "An output analysis csv (-oa) file MUST be specified." << endl;
         cout << "Run \"" << argv[0] << " -help\" for more details." << endl;
 
         return 1;
@@ -359,6 +366,75 @@ int main(int argc, char **argv)
         delete[] trr_fs;
     }
 
+
+    fclose(logger);
+    return performTimelineAnalysis(outpath);
+}
+
+//Splitting code found on http://stackoverflow.com/questions/30797769/splitting-a-string-but-keeping-empty-tokens-c
+void splits(const string& str, vector<string>& tokens, const string& delimiters)
+{
+    // Start at the beginning
+    string::size_type lastPos = 0;
+    // Find position of the first delimiter
+    string::size_type pos = str.find_first_of(delimiters, lastPos);
+
+    // While we still have string to read
+    while (string::npos != pos && string::npos != lastPos)
+    {
+        // Found a token, add it to the vector
+        tokens.push_back(str.substr(lastPos, pos - lastPos));
+        // Look at the next token instead of skipping delimiters
+        lastPos = pos + 1;
+        // Find the position of the next delimiter
+        pos = str.find_first_of(delimiters, lastPos);
+    }
+
+    // Push the last token
+    tokens.push_back(str.substr(lastPos, pos - lastPos));
+}
+
+vector<string> splits(const string &s, const string& delimiters) {
+    vector<string> elems;
+    splits(s, elems, delimiters);
+    return elems;
+}
+
+int performTimelineAnalysis(char * logpath)
+{
+    vector<vector<vector<int>>> timeline;
+
+    //Read the log file
+    printf("Opening timeline log file for analysis...\n");
+    ifstream logfile;
+    logfile.open(logpath);
+    if (!logfile.is_open())
+    {
+        printf("Error opening timeline file for analysis.");
+        return 1;
+    }
+    int currline = 0;
+    string line;
+    while (getline(logfile,line))
+    {
+        printf("\rCurrent line: %i", currline);
+        if (line.find("FRAME") != string::npos)
+        {
+            vector<vector<int>> temp;
+            timeline.push_back(temp);
+        }
+        else if (line.find(',') != string::npos)
+        {
+            auto values = splits(line, ",");
+            vector<int> temp;
+            temp.push_back(stoi(values[0]));
+            temp.push_back(stoi(values[1]));
+            timeline[timeline.size() - 1].push_back(temp);
+        }
+        currline++;
+    }
+    logfile.close();
+    printf("\nDone!\n");
     //Start doing analysis
     //Get a list of all the waters that participated in hydrogen bonding
     vector<int> boundwaters;
@@ -412,7 +488,7 @@ int main(int argc, char **argv)
         int numevents = 0;
         int numAAsparticipated = 0;
         fill(bindingedges.begin(), bindingedges.end(), 0);
-        printf("\rProcessing water %i of %i", nwater+1, boundwaters.size());
+        printf("\rProcessing water %i of %i", nwater + 1, boundwaters.size());
         for (int nframe = 0; nframe < timeline.size() - hbondwindow; nframe++)
         {
             int currpartnercount = 0;
@@ -456,7 +532,7 @@ int main(int argc, char **argv)
                 numevents += bindingedges[n];
             }
         }
-        
+
         if (bridger[nwater])
         {
             numbridgers++;
@@ -474,10 +550,9 @@ int main(int argc, char **argv)
 
     }
     fprintf(csvout, "\n\nOVERALL RESULTS:\n# Bridgers,%i\n# Resident:,%i\n# Bulk:,%i", numbridgers, numresident, numbulk);
+    fclose(csvout);
 
     printf("\n\nDone with analysis!\n");
-    fclose(csvout);
-    fclose(logger);
-    std::cin.get();
+    
     return 0;
 }
