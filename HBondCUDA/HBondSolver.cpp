@@ -437,6 +437,7 @@ int performTimelineAnalysis(char * logpath)
     printf("\nDone!\n");
     //Start doing analysis
     //Get a list of all the waters that participated in hydrogen bonding
+    printf("Getting lists of waters and amino acids involved...");
     vector<int> boundwaters;
     vector<int> boundAAs;
 
@@ -456,8 +457,8 @@ int performTimelineAnalysis(char * logpath)
     }
     sort(boundwaters.begin(), boundwaters.end());
     sort(boundAAs.begin(), boundAAs.end());
-
-    printf("\n\nNumber waters involved in hydrogen bonding: %i\n", boundwaters.size());
+    printf("Done!");
+    printf("\nNumber waters involved in hydrogen bonding: %i\n", boundwaters.size());
     printf("Number AAs involved in hydrogen bonding: %i\n", boundAAs.size());
 
     //Start processing the timeline information
@@ -479,79 +480,62 @@ int performTimelineAnalysis(char * logpath)
     bindingedges.resize(boundAAs.size());
     vector<bool> bridger;
     bridger.resize(boundwaters.size());
-    fill(bridger.begin(), bridger.end(), false);
-    int numbridgers = 0;
-    int numbulk = 0;
-    int numresident = 0;
+    fill(bridger.begin(), bridger.end(), false); //Likely un-necessary, but just in case.
     for (int nwater = 0; nwater < boundwaters.size(); nwater++)
     {
         int numevents = 0;
-        int numAAsparticipated = 0;
+        vector<int> visitedlist;
         fill(bindingedges.begin(), bindingedges.end(), 0);
         printf("\rProcessing water %i of %i", nwater + 1, boundwaters.size());
         for (int nframe = 0; nframe < timeline.size() - hbondwindow; nframe++)
         {
-            int currpartnercount = 0;
+            int boundcount = 0;
             for (int nprot = 0; nprot < boundAAs.size(); nprot++)
             {
-                //Check for the hydrogen bond threshold in the sliding window
                 int boundframes = 0;
                 for (int nwindow = 0; nwindow < hbondwindow; nwindow++)
                 {
                     for (int nsearch = 0; nsearch < timeline[nframe + nwindow].size(); nsearch++)
                     {
-                        boundframes += ((timeline[nframe + nwindow][nsearch][0] == boundAAs[nprot]) && (timeline[nframe + nwindow][nsearch][1] == boundwaters[nwater]));
+                        if ((timeline[nframe + nwindow][nsearch][0] == boundAAs[nprot]) && (timeline[nframe + nwindow][nsearch][1] == boundwaters[nwater]))
+                        {
+                            boundframes++;
+                        }
                     }
-
-
-                }       //Currently Bound                   //Previously Bound          //Currently Unbound                 //Previously Unbound
-                if (((boundframes >= windowthreshold) ^ (bindingedges[nprot] % 2)) || ((boundframes < windowthreshold) ^ !(bindingedges[nprot] % 2)))
-                {
-                    //Found a binding state transition event (On->Off, Off->On)
-                    bindingedges[nprot]++;
                 }
-
-                currpartnercount += bindingedges[nprot] % 2;
+                if (((boundframes >= 4) && (bindingedges[nprot] % 2 == 0)) || ((boundframes < 4) && (bindingedges[nprot] % 2 == 1)))
+                {
+                    bindingedges[nprot]++;
+                    numevents++;
+                }
+                if (bindingedges[nprot] % 2 == 1)
+                {
+                    boundcount++;
+                    if (visitedlist.empty())
+                    {
+                        visitedlist.push_back(boundAAs[nprot]);
+                    }
+                    else
+                    {
+                        if (find(visitedlist.begin(), visitedlist.end(), boundAAs[nprot]) == visitedlist.end())
+                        {
+                            visitedlist.push_back(boundAAs[nprot]);
+                        }
+                    }
+                }
             }
-            if (currpartnercount > 1)
+
+            if (boundcount > 1)
             {
                 bridger[nwater] = true;
             }
-            if (currpartnercount > 4)
+            if (boundcount > 4)
             {
-                printf("WARNING: More than 4 partners found on a water! (Frame: %i, Water: %i)\n\n", nframe, nwater);
+                printf("WARNING: More than 4 partners found on a water.\n");
             }
         }
-
-        //Print out the end results
-        for (int n = 0; n < boundAAs.size(); n++)
-        {
-            if (bindingedges[n] > 0)
-            {
-                numAAsparticipated++;
-                numevents += bindingedges[n];
-            }
-        }
-
-        if (bridger[nwater])
-        {
-            numbridgers++;
-        }
-        if (numAAsparticipated > 1)
-        {
-            numresident++;
-        }
-        else
-        {
-            numbulk++;
-        }
-        //Water ID:, Bridger?:, Bulk?:, #AAs:, # Events:
-        fprintf(csvout, "%i,%s,%s,%i,%i\n", boundwaters[nwater], bridger[nwater] ? "true" : "false", (numAAsparticipated > 1) ? "true" : "false", numAAsparticipated, numevents);
-
+        fprintf(csvout, "%i,%s,%s,%i,%i\n", boundwaters[nwater], bridger[nwater] ? "true" : "false", (visitedlist.size() > 1) ? "false" : "true", visitedlist.size(), numevents);
     }
-    fprintf(csvout, "\n\nOVERALL RESULTS:\n# Bridgers,%i\n# Resident:,%i\n# Bulk:,%i", numbridgers, numresident, numbulk);
-    fclose(csvout);
-
     printf("\n\nDone with analysis!\n");
     
     return 0;
