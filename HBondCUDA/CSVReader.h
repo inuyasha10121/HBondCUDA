@@ -34,7 +34,7 @@ public:
 
     bool is_open() { return isOpen; }
 
-    vector<vector<string>> CSVReader::readCSVFile();
+    vector<vector<string>> readCSVFile();
 };
 
 #endif

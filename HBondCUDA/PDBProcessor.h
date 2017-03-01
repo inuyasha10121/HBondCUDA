@@ -43,11 +43,11 @@ public:
 
     bool is_open() { return isOpen; }
 
-    vector<Atom> PDBProcessor::getAtomsFromPDB();
-    vector<GPUAtom> PDBProcessor::getGPUAtomsFromAtoms(vector<Atom> & atoms);
-    void PDBProcessor::getProtAndWaterFromPDB(vector<vector<string>> hbondtable, vector<Atom> & water, vector<Atom> & proteinDonor, vector<Atom> & proteinAcceptor, 
+    vector<Atom> getAtomsFromPDB();
+    vector<GPUAtom> getGPUAtomsFromAtoms(vector<Atom> & atoms);
+    void getProtAndWaterFromPDB(vector<vector<string>> hbondtable, vector<Atom> & water, vector<Atom> & proteinDonor, vector<Atom> & proteinAcceptor, 
         vector<Atom> & proteinLinker);
-    void PDBProcessor::getProtAndWaterFromAtom(vector<Atom> & atoms, vector<vector<string>> & hbondtable, vector<Atom> & water, vector<Atom> & proteinDonor, 
+    void getProtAndWaterFromAtom(vector<Atom> & atoms, vector<vector<string>> & hbondtable, vector<Atom> & water, vector<Atom> & proteinDonor, 
         vector<Atom> & proteinAcceptor, vector<Atom> & proteinLinker);
 };
 

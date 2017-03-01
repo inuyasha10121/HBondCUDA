@@ -20,6 +20,7 @@
 #define __GPUTYPES_H
 
 #include <string>
+#include <cmath>
 
 using namespace std;
 

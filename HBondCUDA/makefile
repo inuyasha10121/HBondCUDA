@@ -133,7 +133,7 @@ NVCC          := $(CUDA_PATH)/bin/nvcc -ccbin $(HOST_COMPILER)
 
 # internal flags
 NVCCFLAGS   := -m${TARGET_SIZE} -std=c++11 
-CCFLAGS     := -lm -fpermissive
+CCFLAGS     := -lm
 LDFLAGS     :=
 
 # build flags

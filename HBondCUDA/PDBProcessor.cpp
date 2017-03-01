@@ -96,7 +96,8 @@ vector<Atom> PDBProcessor::getAtomsFromPDB()
 
                 // check the element first to see if we
                 // need to keep going or not
-                auto element = trim(line.substr(76, 2));
+                string temp = line.substr(76, 2);
+                auto element = trim(temp);
 
                 // default vdw is -1.0f, so only check if we need to change it
                 // if it's not in the list, just break out (saves a lot of time)
@@ -193,7 +194,8 @@ void PDBProcessor::getProtAndWaterFromPDB(vector<vector<string>> hbondtable, vec
 
                 // check the element first to see if we
                 // need to keep going or not
-                curAtom.element = trim(line.substr(76, 2));
+                string temp = line.substr(76, 2);
+                curAtom.element = trim(temp);
 
                 auto name = line.substr(12, 4);
                 auto resName = line.substr(17, 3);

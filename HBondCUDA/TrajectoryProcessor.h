@@ -27,9 +27,9 @@ private:
     float lambda = 0.0;
 
 public:
-    int TrajectoryProcessor::openTrajectory(string trajpath);
-    void TrajectoryProcessor::closeTrajectory();
-    int TrajectoryProcessor::readFrame(vector<Atom> & atoms);
+    int openTrajectory(string trajpath);
+    void closeTrajectory();
+    int readFrame(vector<Atom> & atoms);
 };
 
 #endif
