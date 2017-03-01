@@ -75,4 +75,7 @@
   <ItemGroup>
     <None Include="vc140.pdb" />
   </ItemGroup>
+  <ItemGroup>
+    <Text Include="makefile" />
+  </ItemGroup>
 </Project>

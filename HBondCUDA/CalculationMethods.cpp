@@ -4,14 +4,13 @@
 #include <iostream>
 #include <stdlib.h>
 #include <vector>
-#include <windows.h>
-#include <ppl.h>
+#include <cmath>
+#include <float.h>
 
 #include "CalculationMethods.h"
 #include "GPUTypes.h"
 #include "PDBProcessor.h"
 
-using namespace concurrency;
 using namespace std;
 
 float distance(float ax, float ay, float az, float bx, float by, float bz)
