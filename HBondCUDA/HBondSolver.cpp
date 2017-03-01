@@ -33,7 +33,7 @@ int index3d(int z, int y, int x, int xmax, int ymax)
     return (z * xmax * ymax) + (y * xmax) + xmax;
 }
 
-int performTimelineAnalysis(char * logpath);
+int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp);
 
 int main(int argc, char **argv)
 {   
@@ -79,9 +79,11 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    cudaDeviceProp deviceProp = setupCUDA();
+
     if (checkCmdLineFlag(argc, (const char**)argv, "analysisonly"))
     {
-        return performTimelineAnalysis(outpath);
+        return performTimelineAnalysis(outpath, deviceProp);
     }
 
     if (checkCmdLineFlag(argc, (const char**)argv, "pdb"))
@@ -124,9 +126,9 @@ int main(int argc, char **argv)
     {
         dt = getCmdLineArgumentInt(argc, (const char**)argv, "dt");
 
-        if (dt < 0)
+        if (dt < 1)
         {
-            cout << "Error: dt must be a positive value." << endl;
+            cout << "Error: dt must be greater than 0." << endl;
             cout << "Exiting..." << endl;
 
             return 1;
@@ -137,9 +139,9 @@ int main(int argc, char **argv)
     {
         hbondwindow = getCmdLineArgumentInt(argc, (const char**)argv, "window");
 
-        if (dt < 0)
+        if (dt < 1)
         {
-            cout << "Error: window must be a positive value." << endl;
+            cout << "Error: window must be greater than 0." << endl;
             cout << "Exiting..." << endl;
 
             return 1;
@@ -158,9 +160,17 @@ int main(int argc, char **argv)
     {
         windowthreshold = getCmdLineArgumentInt(argc, (const char**)argv, "wint");
 
-        if (dt < 0)
+        if (dt < 1)
         {
-            cout << "Error: wint must be a positive value." << endl;
+            cout << "Error: wint must be greater than 0." << endl;
+            cout << "Exiting..." << endl;
+
+            return 1;
+        }
+
+        if (windowthreshold > hbondwindow)
+        {
+            cout << "Error: wint must be less than or equal to window." << endl;
             cout << "Exiting..." << endl;
 
             return 1;
@@ -173,8 +183,6 @@ int main(int argc, char **argv)
     printf("Reading bond identities from hbond csv table...");
     auto hbondtable = csvreader.readCSVFile();
     printf("Done.\n");
-
-    cudaDeviceProp deviceProp = setupCUDA();
 
     //Inputs of frame hbond function
     vector<Atom> water;
@@ -368,7 +376,7 @@ int main(int argc, char **argv)
 
 
     fclose(logger);
-    return performTimelineAnalysis(outpath);
+    return performTimelineAnalysis(outpath, deviceProp);
 }
 
 //Splitting code found on http://stackoverflow.com/questions/30797769/splitting-a-string-but-keeping-empty-tokens-c
@@ -400,9 +408,10 @@ vector<string> splits(const string &s, const string& delimiters) {
     return elems;
 }
 
-int performTimelineAnalysis(char * logpath)
+int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
 {
-    vector<vector<vector<int>>> timeline;
+    vector<int> tllookup;
+    vector<int> flattimeline;
 
     //Read the log file
     printf("Opening timeline log file for analysis...\n");
@@ -420,19 +429,17 @@ int performTimelineAnalysis(char * logpath)
         printf("\rCurrent line: %i", currline);
         if (line.find("FRAME") != string::npos)
         {
-            vector<vector<int>> temp;
-            timeline.push_back(temp);
+            tllookup.push_back(flattimeline.size());
         }
         else if (line.find(',') != string::npos)
         {
             auto values = splits(line, ",");
-            vector<int> temp;
-            temp.push_back(stoi(values[0]));
-            temp.push_back(stoi(values[1]));
-            timeline[timeline.size() - 1].push_back(temp);
+            flattimeline.push_back(stoi(values[0]));
+            flattimeline.push_back(stoi(values[1]));
         }
         currline++;
     }
+    tllookup.push_back(flattimeline.size());
     logfile.close();
     printf("\nDone!\n");
     //Start doing analysis
@@ -441,17 +448,20 @@ int performTimelineAnalysis(char * logpath)
     vector<int> boundwaters;
     vector<int> boundAAs;
 
-    for (int i = 0; i < timeline.size(); i++)
+    for (int i = 0; i < flattimeline.size(); i++)
     {
-        for (int j = 0; j < timeline[i].size(); j++)
+        if (i % 2 == 0)
         {
-            if (!(find(boundwaters.begin(), boundwaters.end(), timeline[i][j][1]) != boundwaters.end()))
+            if (!(find(boundAAs.begin(), boundAAs.end(), flattimeline[i]) != boundAAs.end()))
             {
-                boundwaters.push_back(timeline[i][j][1]);
+                boundAAs.push_back(flattimeline[i]);
             }
-            if (!(find(boundAAs.begin(), boundAAs.end(), timeline[i][j][0]) != boundAAs.end()))
+        }
+        else
+        {
+            if (!(find(boundwaters.begin(), boundwaters.end(), flattimeline[i]) != boundwaters.end()))
             {
-                boundAAs.push_back(timeline[i][j][0]);
+                boundwaters.push_back(flattimeline[i]);
             }
         }
     }
@@ -473,8 +483,58 @@ int performTimelineAnalysis(char * logpath)
     }
 
     //Water ID:, Bridger?:, Bulk?:, #AAs:, # Events:
+    printf("Performing analysis.  This may take a while...\n");
     fprintf(csvout, "Water ID:,Bridger?:,Bulk?:,# AAs:,# Events:\n");
 
+    //GPU METHOD
+    auto gpuAAs = &boundAAs[0];
+    auto gputimeline = &flattimeline[0];
+    auto gputllookup = &tllookup[0];
+
+    char * timelinemap = new char[boundAAs.size() * (tllookup.size() - 1)];
+    char * bridgers = new char[tllookup.size() - 1];
+    char * visited = new char[boundAAs.size()];
+    int * framesbound = new int[tllookup.size() - 1];
+
+    for (int currwater = 0; currwater < boundwaters.size(); currwater++)
+    {
+        printf("\rProcessing water %i of %i", currwater + 1, boundwaters.size());
+        fill(timelinemap, timelinemap + (boundAAs.size() * (tllookup.size() - 1)), false);
+        fill(bridgers, bridgers + tllookup.size() - 1, false);
+        fill(visited, visited + boundAAs.size(), false);
+        fill(framesbound, framesbound + (tllookup.size() - 1), 0);
+
+        timelineMapCuda(timelinemap, gputimeline, gputllookup, gpuAAs, boundwaters[currwater], hbondwindow, windowthreshold, tllookup[tllookup.size() - 1], tllookup.size() - 1, boundAAs.size(), deviceProp);
+        visitAndBridgerAnalysisCuda(bridgers, visited, framesbound, timelinemap, tllookup.size() - 1, boundAAs.size(), deviceProp);
+
+        int temp = 0;
+        for (int i = 0; i < boundAAs.size() * (tllookup.size() - 1); i++)
+        {
+            temp += timelinemap[i] ? 1 : 0;
+        }
+
+        printf("Temp: %i", temp);
+
+        bool bridger = false;
+        int visits = 0;
+        int totalframes = 0;
+        for (int i = 0; i < tllookup.size() - 1; i++)
+        {
+            bridger = bridger || (bool)bridgers[i];
+            totalframes += (bool)framesbound[i];
+        }
+        for (int i = 0; i < boundAAs.size(); i++)
+        {
+            visits += (bool)visited[i];
+        }
+        fprintf(csvout, "%i,%s,%s,%i,%i\n", boundwaters[currwater], bridger ? "true" : "false", (visits > 1) ? "false" : "true", visits, -1);
+    }
+    delete[] timelinemap;
+    delete[] bridgers;
+    delete[] visited;
+    delete[] framesbound;
+    //OLD CPU METHOD
+    /*
     //Binding edges descibes how many transition events happened, which roughly quantifies how frequently the water participated in hbonding
     vector<int> bindingedges;
     bindingedges.resize(boundAAs.size());
@@ -536,7 +596,9 @@ int performTimelineAnalysis(char * logpath)
         }
         fprintf(csvout, "%i,%s,%s,%i,%i\n", boundwaters[nwater], bridger[nwater] ? "true" : "false", (visitedlist.size() > 1) ? "false" : "true", visitedlist.size(), numevents);
     }
+    */
     printf("\n\nDone with analysis!\n");
+    cin.get();
     
     return 0;
 }
