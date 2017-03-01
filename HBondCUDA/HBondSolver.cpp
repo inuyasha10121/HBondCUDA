@@ -37,6 +37,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp);
 
 int main(int argc, char **argv)
 {   
+    setbuf(stdout, NULL);
     //Command line arguements to make the code a bit more versatile
     if (checkCmdLineFlag(argc, (const char **)argv, "help") ||
         checkCmdLineFlag(argc, (const char **)argv, "h") ||
@@ -506,14 +507,6 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
 
         timelineMapCuda(timelinemap, gputimeline, gputllookup, gpuAAs, boundwaters[currwater], hbondwindow, windowthreshold, tllookup[tllookup.size() - 1], tllookup.size() - 1, boundAAs.size(), deviceProp);
         visitAndBridgerAnalysisCuda(bridgers, visited, framesbound, timelinemap, tllookup.size() - 1, boundAAs.size(), deviceProp);
-
-        int temp = 0;
-        for (int i = 0; i < boundAAs.size() * (tllookup.size() - 1); i++)
-        {
-            temp += timelinemap[i] ? 1 : 0;
-        }
-
-        printf("Temp: %i", temp);
 
         bool bridger = false;
         int visits = 0;

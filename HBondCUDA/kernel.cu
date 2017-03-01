@@ -158,33 +158,40 @@ __global__ void timelineMapKernel(char * outMap, int * timeline, int * tllookup,
     int i = blockIdx.x * blockDim.x + threadIdx.x; //Frame
     int j = blockIdx.y * blockDim.y + threadIdx.y; //AA
 
-    int boundframes = 0;
-    for (int currwindow = 0; currwindow < window; currwindow++)
+    if (i < (nframes - window) && j < nAAs)
     {
-        for (int currsearch = tllookup[i]; currsearch < tllookup[i + 1]; currsearch += 2)
+        int boundframes = 0;
+        for (int currwindow = 0; currwindow < window; currwindow++)
         {
-            if ((timeline[currsearch] == boundAAs[j]) && (timeline[currsearch + 1] == currwater))
+            for (int currsearch = tllookup[i + currwindow]; currsearch < tllookup[i + currwindow + 1]; currsearch += 2)
             {
-                boundframes++;
+                if ((timeline[currsearch] == boundAAs[j]) && (timeline[currsearch + 1] == currwater))
+                {
+                    boundframes++;
+                }
             }
         }
+        outMap[(j * nframes) + i] = (boundframes >= threshold);
     }
-    outMap[(j * nframes) + i] = (boundframes >= threshold);
 }
 
 __global__ void visitAndBridgerAnalysisKernel(char * outbridger, char * outvisitlist, int * outframesbound, const char * timelinemap, const int nframes, const int nAAs)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x; //Frame
-    int boundcount = 0;
-    for (int j = 0; j < nAAs; j++)
+    if (i < nframes)
     {
-        if (timelinemap[(j*nframes) + i])
+        int boundcount = 0;
+        for (int j = 0; j < nAAs; j++)
         {
-            boundcount++;
-            outvisitlist[j] = true;  //Might be dangerous
+            if (timelinemap[(j*nframes) + i])
+            {
+                boundcount++;
+                outvisitlist[j] = true;  //Might be dangerous
+            }
         }
+
+        outbridger[i] = (boundcount > 1);
     }
-    outbridger[i] = (boundcount > 1);
 }
 
 
