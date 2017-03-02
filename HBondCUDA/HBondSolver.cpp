@@ -523,6 +523,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         cout << "ERROR: Not enough memory to process a single frame.  Exiting..." << endl;
         return 1;
     }
+    watersperiteration = 1;
     auto iterationsrequired = (int)ceil(numwaters / watersperiteration);
 
     //Initial reference setup
@@ -531,9 +532,11 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     auto gputllookup = &tllookup[0];
 
     //watersperiteration = 1;  //TODO: This is just to appease the fucking watchdog timer.  Get rid of it.
+    auto totaltime = 0;
     for(int curriteration = 0; curriteration < iterationsrequired; curriteration++)
     {
         printf("\rProcessing water set %i of %i", curriteration, iterationsrequired);
+        auto t1 = std::chrono::high_resolution_clock::now();
 
         //Find out how many waters to process this iteration
         int currwaters = 0;
@@ -570,6 +573,16 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         //timelineMapCuda(timelinemap, gputimeline, gputllookup, gpuAAs, gpuwaters, hbondwindow, windowthreshold, tllookup[numframes], numframes, numAAs, currwaters, deviceProp);
         timelineMapCuda(timelinemap, gputimeline, gputllookup, gpuAAs, gpuwaters, hbondwindow, windowthreshold, tllookup[numframes], numframes, numAAs, currwaters, deviceProp);
         //visitAndBridgerAnalysisCuda(bridgers, visited, framesbound, timelinemap, tllookup.size() - 1, boundAAs.size(), deviceProp);
+
+        auto t2 = std::chrono::high_resolution_clock::now();
+        auto elapsedtime = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
+        totaltime += elapsedtime;
+        auto predictedtime = (totaltime / (curriteration + 1) * (iterationsrequired - curriteration));
+
+        int seconds = (int)(predictedtime / 1000) % 60;
+        int minutes = (int)((predictedtime / (1000 * 60)) % 60);
+        int hours = (int)((predictedtime / (1000 * 60 * 60)) % 24);
+        printf("\tPredicted time remaining: %i:%i:%i", hours, minutes, seconds);
 
         delete[] timelinemap;
         delete[] bridgers;
