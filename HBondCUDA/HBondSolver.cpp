@@ -26,6 +26,7 @@ char * csvpath = "D:\\CALB\\analysis.csv";
 int dt = 1;
 int hbondwindow = 5; //MUST BE ODD
 int windowthreshold = 4; //Inclusive
+float cudaMemPercentage = 0.15f;
 
 //---------------------------------------------MAIN CODE BODY---------------------------------------------
 int index3d(int z, int y, int x, int xmax, int ymax)
@@ -44,16 +45,30 @@ int main(int argc, char **argv)
         argc < 2)
     {
         cout << "Usage: " << argv[0] << " -pdb = PDB File Path (Required if not jumping directly to analysis)" << endl;
-        cout << "      -hbt = Hydrogen Bond Lookup Table (Required if not jumping directly to analysis)" << endl;
-        cout << "      -trj = Trajectory Path (Required if not jumping directly to analysis)" << endl;
-        cout << "      -ol = Outpath for Hydrogen Bond Timeline File (Required ALWAYS)" << endl << endl;
-        cout << "      -oa = Outpath for Analysis CSV file (Required ALWAYS)" << endl;
-        cout << "      -dt = Frame skip parameter (Optional, Default 1)" << endl;
-        cout << "      -window = Window frame size for bond analysis (MUST BE ODD) (Optional, Default 5)" << endl;
-        cout << "      -wint = Window threshold for bond analysis (Optional, Default 4)" << endl;
-        cout << "      -analysisonly = Jumps to analysis of timeline file (Optional)" << endl << endl;
+        cout << "      -hbt : Hydrogen Bond Lookup Table (Required if not jumping directly to analysis)" << endl;
+        cout << "      -trj : Trajectory Path (Required if not jumping directly to analysis)" << endl;
+        cout << "      -ol : Outpath for Hydrogen Bond Timeline File (Required ALWAYS)" << endl << endl;
+        cout << "      -oa : Outpath for Analysis CSV file (Required ALWAYS)" << endl;
+        cout << "      -dt=<ARG> : Frame skip parameter (Optional, Default 1)" << endl;
+        cout << "      -window=<ARG> : Window frame size for bond analysis (Optional, Default 5)" << endl;
+        cout << "      -wint=<ARG> : Window threshold for bond analysis (Optional, Default 4)" << endl;
+        cout << "      -gpumem=<ARG> : Percentage of total per-graphics card memory allowed to be used (Optional, 0 to 1, Default 0.15)" << endl;
+        cout << "      -analysisonly = Jumps to analysis of timeline file (Optional)" << endl;
+        cout << endl;
 
         return 0;
+    }
+
+    if (checkCmdLineFlag(argc, (const char**)argv, "gpumem"))
+    {
+        cudaMemPercentage = getCmdLineArgumentFloat(argc, (const char**)argv, "gpumem");
+        if (cudaMemPercentage > 1.0f || cudaMemPercentage < 0.0f)
+        {
+            cout << "Error: gpumem must be between 0 and 1!" << endl;
+            cout << "Exiting..." << endl;
+
+            return 1;
+        }
     }
 
     if (checkCmdLineFlag(argc, (const char**)argv, "ol"))
@@ -143,14 +158,6 @@ int main(int argc, char **argv)
         if (dt < 1)
         {
             cout << "Error: window must be greater than 0." << endl;
-            cout << "Exiting..." << endl;
-
-            return 1;
-        }
-
-        if (dt % 2 != 1)
-        {
-            cout << "Error: window must be an odd value." << endl;
             cout << "Exiting..." << endl;
 
             return 1;
@@ -411,6 +418,18 @@ vector<string> splits(const string &s, const string& delimiters) {
 
 int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
 {
+    // Get how much memory the graphics card is allowed to use (Assuming CUDA_MEM_PERCETAGE)
+    size_t cudaFreeMem;
+    cudaError_t cudaResult = cudaMemGetInfo(&cudaFreeMem, NULL);
+
+    if (cudaResult != cudaSuccess)
+    {
+        cerr << "cudaMemGetInfo failed!" << endl;
+        printf("\nERROR: CUDA is unable to function.  Double check your installation/device settings.");
+        printf("\nExitting...");
+        return 1;
+    }
+
     vector<int> tllookup;
     vector<int> flattimeline;
 
@@ -427,9 +446,9 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     string line;
     while (getline(logfile,line))
     {
-        printf("\rCurrent line: %i", currline);
         if (line.find("FRAME") != string::npos)
         {
+            printf("\rCurrent line: %i", currline);
             tllookup.push_back(flattimeline.size());
         }
         else if (line.find(',') != string::npos)
@@ -487,26 +506,83 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     printf("Performing analysis.  This may take a while...\n");
     fprintf(csvout, "Water ID:,Bridger?:,Bulk?:,# AAs:,# Events:\n");
 
-    //GPU METHOD
+    //-------------------------------------------------------------------GPU METHOD-------------------------------------------------------------------
+
+    int numAAs = boundAAs.size();
+    int numframes = tllookup.size() - 1;
+    int numwaters = boundwaters.size();
+
+    //Get memory parameters
+    cudaFreeMem *= cudaMemPercentage;
+    cudaFreeMem -= ((sizeof(int) * tllookup[numframes]) + (sizeof(int) * numframes) + (sizeof(int) * numAAs));  //Memory reservation for analysis data
+    size_t memperwater = sizeof(int) + (sizeof(char) * numframes) + (sizeof(char) * numAAs) + (sizeof(int) * numframes) + (sizeof(char) * numAAs * numframes);
+
+    auto watersperiteration = floor(cudaFreeMem / memperwater) / 100; //The 100 is here because otherwise it the kernels take WAY too long, for some dumb reason
+    if (watersperiteration == 0)
+    {
+        cout << "ERROR: Not enough memory to process a single frame.  Exiting..." << endl;
+        return 1;
+    }
+    auto iterationsrequired = (int)ceil(numwaters / watersperiteration);
+
+    //Initial reference setup
     auto gpuAAs = &boundAAs[0];
     auto gputimeline = &flattimeline[0];
     auto gputllookup = &tllookup[0];
 
-    char * timelinemap = new char[boundAAs.size() * (tllookup.size() - 1)];
-    char * bridgers = new char[tllookup.size() - 1];
-    char * visited = new char[boundAAs.size()];
-    int * framesbound = new int[tllookup.size() - 1];
+    //watersperiteration = 1;  //TODO: This is just to appease the fucking watchdog timer.  Get rid of it.
+    for(int curriteration = 0; curriteration < iterationsrequired; curriteration++)
+    {
+        printf("\rProcessing water set %i of %i", curriteration, iterationsrequired);
 
+        //Find out how many waters to process this iteration
+        int currwaters = 0;
+        if (numwaters - (curriteration * watersperiteration) < watersperiteration)
+        {
+            currwaters = numwaters - (curriteration * watersperiteration);
+        }
+        else
+        {
+            currwaters = watersperiteration;
+        }
+
+        //Setup the relevant arrays
+        vector<int> waters;
+        waters.resize(currwaters);
+        char * timelinemap = new char[numAAs * numframes * currwaters];
+        char * bridgers = new char[numframes * currwaters];
+        char * visited = new char[numAAs * currwaters];
+        int * framesbound = new int[numframes * currwaters];
+
+        fill(timelinemap, timelinemap + (numAAs * numframes * currwaters), false);
+        fill(bridgers, bridgers + (numframes * currwaters), false);
+        fill(visited, visited + (numAAs * currwaters), false);
+        fill(framesbound, framesbound + (numframes * currwaters), 0);
+
+        for (int i = 0; i < currwaters; i++)
+        {
+            waters[i] = boundwaters[(curriteration * watersperiteration) + i];
+        }
+        auto gpuwaters = &waters[0];
+
+
+
+        //timelineMapCuda(timelinemap, gputimeline, gputllookup, gpuAAs, gpuwaters, hbondwindow, windowthreshold, tllookup[numframes], numframes, numAAs, currwaters, deviceProp);
+        timelineMapCuda(timelinemap, gputimeline, gputllookup, gpuAAs, gpuwaters, hbondwindow, windowthreshold, tllookup[numframes], numframes, numAAs, currwaters, deviceProp);
+        //visitAndBridgerAnalysisCuda(bridgers, visited, framesbound, timelinemap, tllookup.size() - 1, boundAAs.size(), deviceProp);
+
+        delete[] timelinemap;
+        delete[] bridgers;
+        delete[] visited;
+        delete[] framesbound;
+    }
+
+
+
+    //TODO: This is fucking terrible.  Fix it.
+    /*
     for (int currwater = 0; currwater < boundwaters.size(); currwater++)
     {
-        printf("\rProcessing water %i of %i", currwater + 1, boundwaters.size());
-        fill(timelinemap, timelinemap + (boundAAs.size() * (tllookup.size() - 1)), false);
-        fill(bridgers, bridgers + tllookup.size() - 1, false);
-        fill(visited, visited + boundAAs.size(), false);
-        fill(framesbound, framesbound + (tllookup.size() - 1), 0);
-
-        timelineMapCuda(timelinemap, gputimeline, gputllookup, gpuAAs, boundwaters[currwater], hbondwindow, windowthreshold, tllookup[tllookup.size() - 1], tllookup.size() - 1, boundAAs.size(), deviceProp);
-        visitAndBridgerAnalysisCuda(bridgers, visited, framesbound, timelinemap, tllookup.size() - 1, boundAAs.size(), deviceProp);
 
         bool bridger = false;
         int visits = 0;
@@ -522,10 +598,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         }
         fprintf(csvout, "%i,%s,%s,%i,%i\n", boundwaters[currwater], bridger ? "true" : "false", (visits > 1) ? "false" : "true", visits, -1);
     }
-    delete[] timelinemap;
-    delete[] bridgers;
-    delete[] visited;
-    delete[] framesbound;
+    */
     //OLD CPU METHOD
     /*
     //Binding edges descibes how many transition events happened, which roughly quantifies how frequently the water participated in hbonding

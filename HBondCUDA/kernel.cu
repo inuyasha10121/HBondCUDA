@@ -153,21 +153,28 @@ __global__ void donorToWaterKernel(char *out, const GPUAtom *inDonor, const GPUA
     }
 }
 
-__global__ void timelineMapKernel(char * outMap, int * timeline, int * tllookup, int * boundAAs, const int currwater, const int window, const int threshold, const int nframes, const int nAAs)
+__global__ void timelineMapKernel(char * outMap, int * timeline, int * tllookup, int * boundAAs, int * boundwaters, const int window, const int threshold, const int nframes, const int nAAs, const int nwaters)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x; //Frame
     int j = blockIdx.y * blockDim.y + threadIdx.y; //AA
 
-    if (i < (nframes - window) && j < nAAs)
+    if (i < (nframes * nwaters) && j < nAAs)
     {
+        int currwater = i / nframes;
+        int currframe = i % nframes;
+
         int boundframes = 0;
-        for (int currwindow = 0; currwindow < window; currwindow++)
+        if (currframe < (nframes - window))
         {
-            for (int currsearch = tllookup[i + currwindow]; currsearch < tllookup[i + currwindow + 1]; currsearch += 2)
+            for (int currwindow = 0; currwindow < window; currwindow++)
             {
-                if ((timeline[currsearch] == boundAAs[j]) && (timeline[currsearch + 1] == currwater))
+                
+                for (int currsearch = tllookup[currframe + currwindow]; currsearch < tllookup[currframe + currwindow + 1]; currsearch += 2)
                 {
-                    boundframes++;
+                    if ((timeline[currsearch] == boundAAs[j]) && (timeline[currsearch + 1] == boundwaters[currwater]))
+                    {
+                        boundframes++;
+                    }
                 }
             }
         }
@@ -194,6 +201,14 @@ __global__ void visitAndBridgerAnalysisKernel(char * outbridger, char * outvisit
     }
 }
 
+#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
+{
+    if (code != cudaSuccess)
+    {
+        fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+    }
+}
 
 cudaError_t waterFilterCuda(char *out, const GPUAtom *inWater, const float centx, const float centy, const float centz, const float maxdist, const size_t nWaters, cudaDeviceProp &deviceProp)
 {
@@ -537,24 +552,25 @@ Error:
     return cudaStatus;
 }
 
-cudaError_t timelineMapCuda(char * outMap, const int * timeline, const int * tllookup, const int * boundAAs, const int currwater, const int window, const int threshold, 
-    const int ntimeline, const int nframes, const int nAAs, cudaDeviceProp &deviceProp)
+cudaError_t timelineMapCuda(char * outMap, const int * timeline, const int * tllookup, const int * boundAAs, const int * boundwaters, const int window, const int threshold, 
+    const int ntimeline, const int nframes, const int nAAs, const int nwaters, cudaDeviceProp &deviceProp)
 {
     // define device arrays
     char * dev_outMap = 0;
     int * dev_timeline = 0;
     int * dev_tllookup = 0;
     int * dev_boundAAs = 0;
+    int * dev_boundwaters = 0;
     cudaError_t cudaStatus;
 
     // Setup the kernel dimensions
     int blockDim = sqrt(deviceProp.maxThreadsPerBlock);
     auto blockSize = dim3(blockDim, blockDim);
     //Waters are chosen for x dimension, since CUDA can handle MUCH more data along the x dimension than y.
-    auto gridSize = dim3(round((blockDim - 1 + nframes) / blockDim), round((blockDim - 1 + nAAs) / blockDim));
+    auto gridSize = dim3(round((blockDim - 1 + (nframes * nwaters)) / blockDim), round((blockDim - 1 + nAAs) / blockDim));
 
     // Allocate GPU buffers for vectors.
-    cudaStatus = cudaMalloc((void**)&dev_outMap, nframes * nAAs * sizeof(char));
+    cudaStatus = cudaMalloc((void**)&dev_outMap, nframes * nAAs * nwaters * sizeof(char));
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaMalloc failed!" << endl;
         goto Error;
@@ -573,6 +589,12 @@ cudaError_t timelineMapCuda(char * outMap, const int * timeline, const int * tll
     }
 
     cudaStatus = cudaMalloc((void**)&dev_boundAAs, nAAs * sizeof(int));
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMalloc failed!" << endl;
+        goto Error;
+    }
+
+    cudaStatus = cudaMalloc((void**)&dev_boundwaters, nwaters * sizeof(int));
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaMalloc failed!" << endl;
         goto Error;
@@ -597,26 +619,38 @@ cudaError_t timelineMapCuda(char * outMap, const int * timeline, const int * tll
         goto Error;
     }
 
-    timelineMapKernel << <gridSize, blockSize >> > (dev_outMap, dev_timeline, dev_tllookup, dev_boundAAs, currwater, window, threshold, nframes, nAAs);
+    cudaStatus = cudaMemcpy(dev_boundwaters, boundwaters, nwaters * sizeof(int), cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMemcpy failed!" << endl;
+        goto Error;
+    }
+
+    timelineMapKernel << <gridSize, blockSize >> > (dev_outMap, dev_timeline, dev_tllookup, dev_boundAAs, dev_boundwaters, window, threshold, nframes, nAAs, nwaters);
 
     // Check for any errors launching the kernel
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess) {
         cerr << "Timeline map kernel launch failed: " << cudaGetErrorString(cudaStatus) << endl;
+        cerr << "This sometimes occurs when the graphics card is overloaded." << endl;
+        cerr << "Try running again with a lower -gpumem percentage." << endl;
         goto Error;
     }
 
     // cudaDeviceSynchronize waits for the kernel to finish, and returns
     // any errors encountered during the launch.
+    /*
     cudaStatus = cudaDeviceSynchronize();
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaDeviceSynchronize returned error code " << cudaStatus << " after launching timeline map kernel!" << endl;
         cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus);
         goto Error;
     }
+    */
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
 
     // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(outMap, dev_outMap, nframes * nAAs * sizeof(char), cudaMemcpyDeviceToHost);
+    cudaStatus = cudaMemcpy(outMap, dev_outMap, nframes * nAAs * nwaters * sizeof(char), cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaMemcpy failed!" << endl;
         goto Error;

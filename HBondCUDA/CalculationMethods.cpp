@@ -161,8 +161,7 @@ int getHBondsGPU(vector<GPUAtom> gpuproteindonor, vector<GPUAtom> gpuproteinacce
         }
     }
     delete[] filterarray;
-    //TODO: REMOVED, RE-ENABLE IS MEMORY IS AN ISSUE
-    //vector<Atom>().swap(gpuwater);
+    //TODO: PUT IN MEMORY HANDLING CODE HERE.  THIS COULD SERIOUSLY FUCK UP IF THE INPUT IS TOO BIG
 
     //CUDA code for finding donor -> water pairs
     char * donorarray = new char[gpuclosewaters.size() * gpuproteindonor.size()];
