@@ -183,7 +183,7 @@ __global__ void timelineMapKernel2D(char * outMap, int * timeline, int * tllooku
     }
 }
 
-__global__ void timelineMapKernel1D(char * outMap, int * timeline, int * tllookup, int * boundAAs, int * boundwaters, const int window, const int threshold, const int nframes, const int nAAs, const int nwaters)
+__global__ void timelineMapKernel1D(char * outMap, int * timeline, int * tllookup, const int window, const int threshold, const int nframes, const int nAAs, const int nwaters)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < ((nframes - window) * nwaters * nAAs))
@@ -194,9 +194,10 @@ __global__ void timelineMapKernel1D(char * outMap, int * timeline, int * tllooku
         int boundframes = 0;
         for (int currwindow = 0; currwindow < window; currwindow++)
         {
-            for (int currsearch = tllookup[frame + currwindow]; currsearch < tllookup[frame + currwindow + 1]; currsearch += 2)
+            int searchb = tllookup[frame + currwindow + 1];
+            for (int currsearch = tllookup[frame + currwindow]; currsearch < searchb; currsearch += 2)
             {
-                if ((timeline[currsearch] == boundAAs[AA]) && (timeline[currsearch + 1] == boundwaters[water]))
+                if ((timeline[currsearch] == AA) && (timeline[currsearch + 1] == water))
                 {
                     boundframes++;
                 }
@@ -726,8 +727,7 @@ Error:
     return cudaStatus;
 }
 
-cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * tllookup, const int * boundAAs, const int * boundwaters, const int window, const int threshold,
-    const int ntimeline, const int nframes, const int nAAs, const int nwaters, cudaDeviceProp &deviceProp)
+cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * tllookup, const int window, const int threshold, const int ntimeline, const int nframes, const int nAAs, const int nwaters, cudaDeviceProp &deviceProp)
 {
     // define device arrays
     char * dev_outMap = 0;
@@ -774,17 +774,6 @@ cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * t
         goto Error;
     }
 
-    cudaStatus = cudaMalloc((void**)&dev_boundAAs, nAAs * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_boundwaters, nwaters * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
-        goto Error;
-    }
 #ifdef BENCHMARK_TIMING
     cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
@@ -806,17 +795,6 @@ cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * t
         goto Error;
     }
 
-    cudaStatus = cudaMemcpy(dev_boundAAs, boundAAs, nAAs * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
-        goto Error;
-    }
-
-    cudaStatus = cudaMemcpy(dev_boundwaters, boundwaters, nwaters * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
-        goto Error;
-    }
 #ifdef BENCHMARK_TIMING
     cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
@@ -825,7 +803,7 @@ cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * t
     cudaEventRecord(start, 0);
 #endif
 
-    timelineMapKernel1D << <occGridSize, occBlockSize >> > (dev_outMap, dev_timeline, dev_tllookup, dev_boundAAs, dev_boundwaters, window, threshold, nframes, nAAs, nwaters);
+    timelineMapKernel1D << <occGridSize, occBlockSize >> > (dev_outMap, dev_timeline, dev_tllookup, window, threshold, nframes, nAAs, nwaters);
     // Check for any errors launching the kernel
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess) {

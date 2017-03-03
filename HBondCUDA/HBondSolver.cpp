@@ -420,6 +420,8 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
 {
     vector<int> tllookup;
     vector<int> flattimeline;
+    vector<int> boundwaters;
+    vector<int> boundAAs;
 
     //Read the log file
     printf("Opening timeline log file for analysis...\n");
@@ -442,8 +444,30 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         else if (line.find(',') != string::npos)
         {
             auto values = splits(line, ",");
-            flattimeline.push_back(stoi(values[0]));
-            flattimeline.push_back(stoi(values[1]));
+            auto resAA = stoi(values[0]);
+            auto reswater = stoi(values[1]);
+            auto AAsearch = find(boundAAs.begin(), boundAAs.end(), resAA);
+            auto watersearch = find(boundwaters.begin(), boundwaters.end(), reswater);
+
+            if (AAsearch == boundAAs.end())
+            {
+                flattimeline.push_back(boundAAs.size());
+                boundAAs.push_back(resAA);
+            }
+            else
+            {
+                flattimeline.push_back(distance(boundAAs.begin(), AAsearch));
+            }
+
+            if (watersearch == boundwaters.end())
+            {
+                flattimeline.push_back(boundwaters.size());
+                boundwaters.push_back(reswater);
+            }
+            else
+            {
+                flattimeline.push_back(distance(boundwaters.begin(), watersearch));
+            }
         }
         currline++;
     }
@@ -451,32 +475,8 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     logfile.close();
     printf("\nDone!\n");
     //Start doing analysis
-    //Get a list of all the waters that participated in hydrogen bonding
-    printf("Getting lists of waters and amino acids involved...");
-    vector<int> boundwaters;
-    vector<int> boundAAs;
 
-    for (int i = 0; i < flattimeline.size(); i++)
-    {
-        if (i % 2 == 0)
-        {
-            if (!(find(boundAAs.begin(), boundAAs.end(), flattimeline[i]) != boundAAs.end()))
-            {
-                boundAAs.push_back(flattimeline[i]);
-            }
-        }
-        else
-        {
-            if (!(find(boundwaters.begin(), boundwaters.end(), flattimeline[i]) != boundwaters.end()))
-            {
-                boundwaters.push_back(flattimeline[i]);
-            }
-        }
-    }
-    sort(boundwaters.begin(), boundwaters.end());
-    sort(boundAAs.begin(), boundAAs.end());
-    printf("Done!");
-    printf("\nNumber waters involved in hydrogen bonding: %i\n", boundwaters.size());
+    printf("Number waters involved in hydrogen bonding: %i\n", boundwaters.size());
     printf("Number AAs involved in hydrogen bonding: %i\n", boundAAs.size());
 
     //Start processing the timeline information
@@ -513,8 +513,8 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     }
 
     cudaFreeMem *= cudaMemPercentage;
-    cudaFreeMem -= ((sizeof(int) * tllookup[numframes]) + (sizeof(int) * numframes) + (sizeof(int) * numAAs));  //Memory reservation for analysis data
-    size_t memperwater = sizeof(int) + (sizeof(char) * numframes) + (sizeof(char) * numAAs) + (sizeof(int) * numframes) + (sizeof(char) * numAAs * numframes);
+    cudaFreeMem -= ((sizeof(int) * tllookup[numframes]) + (sizeof(int) * numframes));
+    size_t memperwater = (sizeof(char) * numframes * numAAs);
 
     auto watersperiteration = floor(cudaFreeMem / memperwater) / 100; //The 100 is here because otherwise it the kernels take WAY too long, for some dumb reason
     if (watersperiteration == 0)
@@ -522,7 +522,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         cout << "ERROR: Not enough memory to process a single frame.  Exiting..." << endl;
         return 1;
     }
-    //watersperiteration = 10;   //TODO: This is just to appease the fucking watchdog timer.  Get rid of it.
+    watersperiteration = 10;   //TODO: This is just to appease the fucking watchdog timer.  Get rid of it.
     auto iterationsrequired = (int)ceil(numwaters / watersperiteration);
 
     //Initial reference setup
@@ -568,7 +568,8 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
 
 
 
-        timelineMapCuda1D(timelinemap, gputimeline, gputllookup, gpuAAs, gpuwaters, hbondwindow, windowthreshold, tllookup[numframes], numframes, numAAs, currwaters, deviceProp);
+        timelineMapCuda1D(timelinemap, gputimeline, gputllookup, hbondwindow, windowthreshold, tllookup[numframes], numframes, numAAs, currwaters, deviceProp);
+        //timelineMapCuda2D(timelinemap, gputimeline, gputllookup, gpuAAs, gpuwaters, hbondwindow, windowthreshold, tllookup[numframes], numframes, numAAs, currwaters, deviceProp);
         //visitAndBridgerAnalysisCuda(bridgers, visited, framesbound, timelinemap, tllookup.size() - 1, boundAAs.size(), deviceProp);
 
         auto t2 = std::chrono::high_resolution_clock::now();
