@@ -418,18 +418,6 @@ vector<string> splits(const string &s, const string& delimiters) {
 
 int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
 {
-    // Get how much memory the graphics card is allowed to use (Assuming CUDA_MEM_PERCETAGE)
-    size_t cudaFreeMem;
-    cudaError_t cudaResult = cudaMemGetInfo(&cudaFreeMem, NULL);
-
-    if (cudaResult != cudaSuccess)
-    {
-        cerr << "cudaMemGetInfo failed!" << endl;
-        printf("\nERROR: CUDA is unable to function.  Double check your installation/device settings.");
-        printf("\nExitting...");
-        return 1;
-    }
-
     vector<int> tllookup;
     vector<int> flattimeline;
 
@@ -513,6 +501,17 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     int numwaters = boundwaters.size();
 
     //Get memory parameters
+    size_t cudaFreeMem;
+    cudaError_t cudaResult = cudaMemGetInfo(&cudaFreeMem, NULL);
+
+    if (cudaResult != cudaSuccess)
+    {
+        cerr << "cudaMemGetInfo failed!" << endl;
+        printf("\nERROR: CUDA is unable to function.  Double check your installation/device settings.");
+        printf("\nExitting...");
+        return 1;
+    }
+
     cudaFreeMem *= cudaMemPercentage;
     cudaFreeMem -= ((sizeof(int) * tllookup[numframes]) + (sizeof(int) * numframes) + (sizeof(int) * numAAs));  //Memory reservation for analysis data
     size_t memperwater = sizeof(int) + (sizeof(char) * numframes) + (sizeof(char) * numAAs) + (sizeof(int) * numframes) + (sizeof(char) * numAAs * numframes);
@@ -523,7 +522,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         cout << "ERROR: Not enough memory to process a single frame.  Exiting..." << endl;
         return 1;
     }
-    watersperiteration = 1;
+    //watersperiteration = 10;   //TODO: This is just to appease the fucking watchdog timer.  Get rid of it.
     auto iterationsrequired = (int)ceil(numwaters / watersperiteration);
 
     //Initial reference setup
@@ -531,7 +530,6 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     auto gputimeline = &flattimeline[0];
     auto gputllookup = &tllookup[0];
 
-    //watersperiteration = 1;  //TODO: This is just to appease the fucking watchdog timer.  Get rid of it.
     auto totaltime = 0;
     for(int curriteration = 0; curriteration < iterationsrequired; curriteration++)
     {
@@ -570,8 +568,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
 
 
 
-        //timelineMapCuda(timelinemap, gputimeline, gputllookup, gpuAAs, gpuwaters, hbondwindow, windowthreshold, tllookup[numframes], numframes, numAAs, currwaters, deviceProp);
-        timelineMapCuda(timelinemap, gputimeline, gputllookup, gpuAAs, gpuwaters, hbondwindow, windowthreshold, tllookup[numframes], numframes, numAAs, currwaters, deviceProp);
+        timelineMapCuda1D(timelinemap, gputimeline, gputllookup, gpuAAs, gpuwaters, hbondwindow, windowthreshold, tllookup[numframes], numframes, numAAs, currwaters, deviceProp);
         //visitAndBridgerAnalysisCuda(bridgers, visited, framesbound, timelinemap, tllookup.size() - 1, boundAAs.size(), deviceProp);
 
         auto t2 = std::chrono::high_resolution_clock::now();

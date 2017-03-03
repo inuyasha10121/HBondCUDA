@@ -1,4 +1,5 @@
 #define _USE_MATH_DEFINES
+//#define BENCHMARK_TIMING
 
 #include <stdio.h>
 #include <iostream>
@@ -153,7 +154,7 @@ __global__ void donorToWaterKernel(char *out, const GPUAtom *inDonor, const GPUA
     }
 }
 
-__global__ void timelineMapKernel(char * outMap, int * timeline, int * tllookup, int * boundAAs, int * boundwaters, const int window, const int threshold, const int nframes, const int nAAs, const int nwaters)
+__global__ void timelineMapKernel2D(char * outMap, int * timeline, int * tllookup, int * boundAAs, int * boundwaters, const int window, const int threshold, const int nframes, const int nAAs, const int nwaters)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x; //Frame
     int j = blockIdx.y * blockDim.y + threadIdx.y; //AA
@@ -182,6 +183,30 @@ __global__ void timelineMapKernel(char * outMap, int * timeline, int * tllookup,
     }
 }
 
+__global__ void timelineMapKernel1D(char * outMap, int * timeline, int * tllookup, int * boundAAs, int * boundwaters, const int window, const int threshold, const int nframes, const int nAAs, const int nwaters)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < ((nframes - window) * nwaters * nAAs))
+    {
+        int frame = i / (nwaters * nAAs);
+        int water = (i % (nwaters * nAAs)) / nwaters;
+        int AA = (i % (nwaters * nAAs)) % nwaters;
+        int boundframes = 0;
+        for (int currwindow = 0; currwindow < window; currwindow++)
+        {
+            for (int currsearch = tllookup[frame + currwindow]; currsearch < tllookup[frame + currwindow + 1]; currsearch += 2)
+            {
+                if ((timeline[currsearch] == boundAAs[AA]) && (timeline[currsearch + 1] == boundwaters[water]))
+                {
+                    boundframes++;
+                }
+            }
+        }
+        outMap[i] = (boundframes >= threshold);
+    }
+}
+
+
 __global__ void visitAndBridgerAnalysisKernel(char * outbridger, char * outvisitlist, int * outframesbound, const char * timelinemap, const int nframes, const int nAAs)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x; //Frame
@@ -198,15 +223,6 @@ __global__ void visitAndBridgerAnalysisKernel(char * outbridger, char * outvisit
         }
 
         outbridger[i] = (boundcount > 1);
-    }
-}
-
-#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
-inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
-{
-    if (code != cudaSuccess)
-    {
-        fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
     }
 }
 
@@ -552,7 +568,7 @@ Error:
     return cudaStatus;
 }
 
-cudaError_t timelineMapCuda(char * outMap, const int * timeline, const int * tllookup, const int * boundAAs, const int * boundwaters, const int window, const int threshold, 
+cudaError_t timelineMapCuda2D(char * outMap, const int * timeline, const int * tllookup, const int * boundAAs, const int * boundwaters, const int window, const int threshold, 
     const int ntimeline, const int nframes, const int nAAs, const int nwaters, cudaDeviceProp &deviceProp)
 {
     // define device arrays
@@ -563,13 +579,33 @@ cudaError_t timelineMapCuda(char * outMap, const int * timeline, const int * tll
     int * dev_boundwaters = 0;
     cudaError_t cudaStatus;
 
+    //For GPU benchmarking
+#ifdef BENCHMARK_TIMING
+    float time;
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    printf("\n\nSTARTING BENCHMARKING:\n");
+#endif
     // Setup the kernel dimensions
+    
     int blockDim = sqrt(deviceProp.maxThreadsPerBlock);
     auto blockSize = dim3(blockDim, blockDim);
     //Waters are chosen for x dimension, since CUDA can handle MUCH more data along the x dimension than y.
     auto gridSize = dim3(round((blockDim - 1 + (nframes * nwaters)) / blockDim), round((blockDim - 1 + nAAs) / blockDim));
 
+    /*
+    int occBlockSize;
+    int occMinGridSize;
+    int occGridSize;
+    cudaOccupancyMaxPotentialBlockSize(&occMinGridSize, &occBlockSize, timelineMapKernel, 0, nwaters * nframes * nAAs);
+    occGridSize = ((nwaters * nframes * nAAs) + occBlockSize - 1) / occBlockSize;
+    */
+
     // Allocate GPU buffers for vectors.
+#ifdef BENCHMARK_TIMING
+    cudaEventRecord(start, 0);
+#endif
     cudaStatus = cudaMalloc((void**)&dev_outMap, nframes * nAAs * nwaters * sizeof(char));
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaMalloc failed!" << endl;
@@ -599,6 +635,13 @@ cudaError_t timelineMapCuda(char * outMap, const int * timeline, const int * tll
         cerr << "cudaMalloc failed!" << endl;
         goto Error;
     }
+#ifdef BENCHMARK_TIMING
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&time, start, stop);
+    printf("Malloc elapsed time:  %3.3f ms \n", time);
+    cudaEventRecord(start, 0);
+#endif
 
     // Copy input vectors from host memory to GPU buffers.
     cudaStatus = cudaMemcpy(dev_timeline, timeline, nframes * nAAs * sizeof(int), cudaMemcpyHostToDevice);
@@ -624,9 +667,15 @@ cudaError_t timelineMapCuda(char * outMap, const int * timeline, const int * tll
         cerr << "cudaMemcpy failed!" << endl;
         goto Error;
     }
+#ifdef BENCHMARK_TIMING
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&time, start, stop);
+    printf("Memcpy elapsed time:  %3.3f ms \n", time);
+    cudaEventRecord(start, 0);
+#endif
 
-    timelineMapKernel << <gridSize, blockSize >> > (dev_outMap, dev_timeline, dev_tllookup, dev_boundAAs, dev_boundwaters, window, threshold, nframes, nAAs, nwaters);
-
+    timelineMapKernel2D << <gridSize, blockSize >> > (dev_outMap, dev_timeline, dev_tllookup, dev_boundAAs, dev_boundwaters, window, threshold, nframes, nAAs, nwaters);
     // Check for any errors launching the kernel
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess) {
@@ -638,16 +687,21 @@ cudaError_t timelineMapCuda(char * outMap, const int * timeline, const int * tll
 
     // cudaDeviceSynchronize waits for the kernel to finish, and returns
     // any errors encountered during the launch.
-    /*
     cudaStatus = cudaDeviceSynchronize();
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaDeviceSynchronize returned error code " << cudaStatus << " after launching timeline map kernel!" << endl;
         cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus);
         goto Error;
     }
-    */
-    gpuErrchk(cudaPeekAtLastError());
-    gpuErrchk(cudaDeviceSynchronize());
+
+#ifdef BENCHMARK_TIMING
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&time, start, stop);
+    printf("Kernel+Sync elapsed time:  %3.3f ms \n", time);
+    cudaEventRecord(start, 0);
+#endif
+
 
     // Copy output vector from GPU buffer to host memory.
     cudaStatus = cudaMemcpy(outMap, dev_outMap, nframes * nAAs * nwaters * sizeof(char), cudaMemcpyDeviceToHost);
@@ -655,6 +709,162 @@ cudaError_t timelineMapCuda(char * outMap, const int * timeline, const int * tll
         cerr << "cudaMemcpy failed!" << endl;
         goto Error;
     }
+#ifdef BENCHMARK_TIMING
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&time, start, stop);
+    printf("Memcpy elapsed time:  %3.3f ms \n", time);
+#endif
+
+    // clear all our device arrays
+Error:
+    cudaFree(dev_outMap);
+    cudaFree(dev_timeline);
+    cudaFree(dev_tllookup);
+    cudaFree(dev_boundAAs);
+
+    return cudaStatus;
+}
+
+cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * tllookup, const int * boundAAs, const int * boundwaters, const int window, const int threshold,
+    const int ntimeline, const int nframes, const int nAAs, const int nwaters, cudaDeviceProp &deviceProp)
+{
+    // define device arrays
+    char * dev_outMap = 0;
+    int * dev_timeline = 0;
+    int * dev_tllookup = 0;
+    int * dev_boundAAs = 0;
+    int * dev_boundwaters = 0;
+    cudaError_t cudaStatus;
+
+    //For GPU benchmarking
+#ifdef BENCHMARK_TIMING
+    float time;
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    printf("\n\nSTARTING BENCHMARKING:\n");
+#endif
+    // Setup the kernel dimensions
+    int occBlockSize;
+    int occMinGridSize;
+    int occGridSize;
+    cudaOccupancyMaxPotentialBlockSize(&occMinGridSize, &occBlockSize, timelineMapKernel1D, 0, nwaters * nframes * nAAs);
+    occGridSize = ((nwaters * nframes * nAAs) + occBlockSize - 1) / occBlockSize;
+
+    // Allocate GPU buffers for vectors.
+#ifdef BENCHMARK_TIMING
+    cudaEventRecord(start, 0);
+#endif
+    cudaStatus = cudaMalloc((void**)&dev_outMap, nframes * nAAs * nwaters * sizeof(char));
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMalloc failed!" << endl;
+        goto Error;
+    }
+
+    cudaStatus = cudaMalloc((void**)&dev_timeline, ntimeline * sizeof(int));
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMalloc failed!" << endl;
+        goto Error;
+    }
+
+    cudaStatus = cudaMalloc((void**)&dev_tllookup, (nframes + 1) * sizeof(int));
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMalloc failed!" << endl;
+        goto Error;
+    }
+
+    cudaStatus = cudaMalloc((void**)&dev_boundAAs, nAAs * sizeof(int));
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMalloc failed!" << endl;
+        goto Error;
+    }
+
+    cudaStatus = cudaMalloc((void**)&dev_boundwaters, nwaters * sizeof(int));
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMalloc failed!" << endl;
+        goto Error;
+    }
+#ifdef BENCHMARK_TIMING
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&time, start, stop);
+    printf("Malloc elapsed time:  %3.3f ms \n", time);
+    cudaEventRecord(start, 0);
+#endif
+
+    // Copy input vectors from host memory to GPU buffers.
+    cudaStatus = cudaMemcpy(dev_timeline, timeline, nframes * nAAs * sizeof(int), cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMemcpy failed!" << endl;
+        goto Error;
+    }
+
+    cudaStatus = cudaMemcpy(dev_tllookup, tllookup, (nframes + 1) * sizeof(int), cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMemcpy failed!" << endl;
+        goto Error;
+    }
+
+    cudaStatus = cudaMemcpy(dev_boundAAs, boundAAs, nAAs * sizeof(int), cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMemcpy failed!" << endl;
+        goto Error;
+    }
+
+    cudaStatus = cudaMemcpy(dev_boundwaters, boundwaters, nwaters * sizeof(int), cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMemcpy failed!" << endl;
+        goto Error;
+    }
+#ifdef BENCHMARK_TIMING
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&time, start, stop);
+    printf("Memcpy elapsed time:  %3.3f ms \n", time);
+    cudaEventRecord(start, 0);
+#endif
+
+    timelineMapKernel1D << <occGridSize, occBlockSize >> > (dev_outMap, dev_timeline, dev_tllookup, dev_boundAAs, dev_boundwaters, window, threshold, nframes, nAAs, nwaters);
+    // Check for any errors launching the kernel
+    cudaStatus = cudaGetLastError();
+    if (cudaStatus != cudaSuccess) {
+        cerr << "Timeline map kernel launch failed: " << cudaGetErrorString(cudaStatus) << endl;
+        cerr << "This sometimes occurs when the graphics card is overloaded." << endl;
+        cerr << "Try running again with a lower -gpumem percentage." << endl;
+        goto Error;
+    }
+
+    // cudaDeviceSynchronize waits for the kernel to finish, and returns
+    // any errors encountered during the launch.
+    cudaStatus = cudaDeviceSynchronize();
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaDeviceSynchronize returned error code " << cudaStatus << " after launching timeline map kernel!" << endl;
+        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus);
+        goto Error;
+    }
+
+#ifdef BENCHMARK_TIMING
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&time, start, stop);
+    printf("Kernel+Sync elapsed time:  %3.3f ms \n", time);
+    cudaEventRecord(start, 0);
+#endif
+
+
+    // Copy output vector from GPU buffer to host memory.
+    cudaStatus = cudaMemcpy(outMap, dev_outMap, nframes * nAAs * nwaters * sizeof(char), cudaMemcpyDeviceToHost);
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMemcpy failed!" << endl;
+        goto Error;
+    }
+#ifdef BENCHMARK_TIMING
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&time, start, stop);
+    printf("Memcpy elapsed time:  %3.3f ms \n", time);
+#endif
 
     // clear all our device arrays
 Error:
