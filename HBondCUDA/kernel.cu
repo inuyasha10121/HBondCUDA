@@ -203,6 +203,7 @@ __global__ void timelineMapKernel1D(char * outMap, int * timeline, int * tllooku
                 }
             }
         }
+        __syncthreads();
         outMap[i] = (boundframes >= threshold);
     }
 }
@@ -746,11 +747,24 @@ cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * t
     printf("\n\nSTARTING BENCHMARKING:\n");
 #endif
     // Setup the kernel dimensions
+    /*
     int occBlockSize;
     int occMinGridSize;
     int occGridSize;
     cudaOccupancyMaxPotentialBlockSize(&occMinGridSize, &occBlockSize, timelineMapKernel1D, 0, nwaters * nframes * nAAs);
     occGridSize = ((nwaters * nframes * nAAs) + occBlockSize - 1) / occBlockSize;
+    */
+    // use div because it's more accurrate than the rounding BS
+    auto gridDiv = div((nwaters * nframes * nAAs), deviceProp.maxThreadsPerBlock);
+    auto gridY = gridDiv.quot;
+
+    // ass backwards way of rounding up (maybe use the same trick as above? It might be "faster")
+    if (gridDiv.rem != 0)
+        gridY++;
+
+    // find the block and grid size
+    auto blockSize = deviceProp.maxThreadsPerBlock;
+    int gridSize = min(16 * deviceProp.multiProcessorCount, gridY);
 
     // Allocate GPU buffers for vectors.
 #ifdef BENCHMARK_TIMING
@@ -783,7 +797,7 @@ cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * t
 #endif
 
     // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_timeline, timeline, nframes * nAAs * sizeof(int), cudaMemcpyHostToDevice);
+    cudaStatus = cudaMemcpy(dev_timeline, timeline, ntimeline * sizeof(int), cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaMemcpy failed!" << endl;
         goto Error;
@@ -803,7 +817,7 @@ cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * t
     cudaEventRecord(start, 0);
 #endif
 
-    timelineMapKernel1D << <occGridSize, occBlockSize >> > (dev_outMap, dev_timeline, dev_tllookup, window, threshold, nframes, nAAs, nwaters);
+    timelineMapKernel1D << <gridSize, blockSize >> > (dev_outMap, dev_timeline, dev_tllookup, window, threshold, nframes, nAAs, nwaters);
     // Check for any errors launching the kernel
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess) {
@@ -818,7 +832,7 @@ cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * t
     cudaStatus = cudaDeviceSynchronize();
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaDeviceSynchronize returned error code " << cudaStatus << " after launching timeline map kernel!" << endl;
-        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus);
+        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus) << "'";
         goto Error;
     }
 

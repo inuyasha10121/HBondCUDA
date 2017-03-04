@@ -508,7 +508,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     {
         cerr << "cudaMemGetInfo failed!" << endl;
         printf("\nERROR: CUDA is unable to function.  Double check your installation/device settings.");
-        printf("\nExitting...");
+        printf("\nExiting...");
         return 1;
     }
 
@@ -516,13 +516,14 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     cudaFreeMem -= ((sizeof(int) * tllookup[numframes]) + (sizeof(int) * numframes));
     size_t memperwater = (sizeof(char) * numframes * numAAs);
 
-    auto watersperiteration = floor(cudaFreeMem / memperwater) / 100; //The 100 is here because otherwise it the kernels take WAY too long, for some dumb reason
+    auto watersperiteration = floor(cudaFreeMem / memperwater); //The 100 is here because otherwise it the kernels take WAY too long, for some dumb reason
+    //int watersperiteration = floor(float(cudaFreeMem - (numframes * numAAs * sizeof(char))) / sizeof(char));
     if (watersperiteration == 0)
     {
         cout << "ERROR: Not enough memory to process a single frame.  Exiting..." << endl;
         return 1;
     }
-    watersperiteration = 10;   //TODO: This is just to appease the fucking watchdog timer.  Get rid of it.
+    //watersperiteration = 1000;   //TODO: This is just to appease the fucking watchdog timer.  Get rid of it.
     auto iterationsrequired = (int)ceil(numwaters / watersperiteration);
 
     //Initial reference setup
@@ -564,7 +565,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         {
             waters[i] = boundwaters[(curriteration * watersperiteration) + i];
         }
-        auto gpuwaters = &waters[0];
+        //auto gpuwaters = &waters[0];
 
 
 
