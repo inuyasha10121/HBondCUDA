@@ -20,6 +20,6 @@ cudaError_t timelineMapCuda2D(char * outMap, const int * timeline, const int * t
     const int ntimeline, const int nframes, const int nAAs, const int nwaters, cudaDeviceProp &deviceProp);
 cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * tllookup, const int window, const int threshold,
     const int ntimeline, const int nframes, const int nAAs, const int nwaters, cudaDeviceProp &deviceProp);
-cudaError_t visitAndBridgerAnalysisCuda(char * outbridger, char * outvisitlist, int * outframesbound, const char * timelinemap, const int nframes, const int nAAs, cudaDeviceProp &deviceProp);
+cudaError_t visitAndBridgerAnalysisCuda1D(char * outbridger, char * outvisitlist, int * outframesbound, const char * timelinemap, const int nframes, const int nAAs, const int nwaters, cudaDeviceProp &deviceProp);
 
 #endif

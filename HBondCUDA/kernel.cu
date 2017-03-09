@@ -209,22 +209,27 @@ __global__ void timelineMapKernel1D(char * outMap, int * timeline, int * tllooku
 }
 
 
-__global__ void visitAndBridgerAnalysisKernel(char * outbridger, char * outvisitlist, int * outframesbound, const char * timelinemap, const int nframes, const int nAAs)
+__global__ void visitAndBridgerAnalysisKernel1D(char * outbridger, char * outvisitlist, int * outframesbound, const char * timelinemap, const int nframes, const int nAAs, const int nwaters)
 {
-    int i = blockIdx.x * blockDim.x + threadIdx.x; //Frame
-    if (i < nframes)
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (i < (nframes * nwaters * nAAs))
     {
+        int frame = i / (nwaters * nAAs);
+        int water = (i % (nwaters * nAAs)) / nwaters;
+
         int boundcount = 0;
         for (int j = 0; j < nAAs; j++)
         {
-            if (timelinemap[(j*nframes) + i])
+            if (timelinemap[(j + nwaters * (water + nframes * frame))])
             {
                 boundcount++;
-                outvisitlist[j] = true;  //Might be dangerous
+                outvisitlist[(water * nAAs) + j] = true;  //Might be unsafe
             }
         }
-
-        outbridger[i] = (boundcount > 1);
+        
+        outbridger[(water * nframes) + frame] = (boundcount > 1);
+        //outframesbound[(water * nframes) + frame] = boundcount;        
     }
 }
 
@@ -734,8 +739,6 @@ cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * t
     char * dev_outMap = 0;
     int * dev_timeline = 0;
     int * dev_tllookup = 0;
-    int * dev_boundAAs = 0;
-    int * dev_boundwaters = 0;
     cudaError_t cudaStatus;
 
     //For GPU benchmarking
@@ -863,12 +866,11 @@ Error:
     cudaFree(dev_outMap);
     cudaFree(dev_timeline);
     cudaFree(dev_tllookup);
-    cudaFree(dev_boundAAs);
 
     return cudaStatus;
 }
 
-cudaError_t visitAndBridgerAnalysisCuda(char * outbridger, char * outvisitlist, int * outframesbound, const char * timelinemap, const int nframes, const int nAAs, cudaDeviceProp &deviceProp)
+cudaError_t visitAndBridgerAnalysisCuda1D(char * outbridger, char * outvisitlist, int * outframesbound, const char * timelinemap, const int nframes, const int nAAs, const int nwaters, cudaDeviceProp &deviceProp)
 {
     // the device arrays
     char * dev_outbridger = 0;
@@ -891,25 +893,25 @@ cudaError_t visitAndBridgerAnalysisCuda(char * outbridger, char * outvisitlist, 
     int gridSize = min(16 * deviceProp.multiProcessorCount, gridY);
 
     // Allocate GPU buffers for vectors
-    cudaStatus = cudaMalloc((void**)&dev_outbridger, nframes * sizeof(char));
+    cudaStatus = cudaMalloc((void**)&dev_outbridger, nframes * nwaters * sizeof(char));
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaMalloc failed!" << endl;
         goto Error;
     }
 
-    cudaStatus = cudaMalloc((void**)&dev_outvisitlist, nAAs * sizeof(char));
+    cudaStatus = cudaMalloc((void**)&dev_outvisitlist, nwaters * nAAs * sizeof(char));
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaMalloc failed!" << endl;
         goto Error;
     }
 
-    cudaStatus = cudaMalloc((void**)&dev_outframesbound, nframes * sizeof(int));
+    cudaStatus = cudaMalloc((void**)&dev_outframesbound, nframes * nwaters * sizeof(int));
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaMalloc failed!" << endl;
         goto Error;
     }
 
-    cudaStatus = cudaMalloc((void**)&dev_timelinemap, nframes * nAAs * sizeof(char));
+    cudaStatus = cudaMalloc((void**)&dev_timelinemap, nframes * nAAs * nwaters * sizeof(char));
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaMalloc failed!" << endl;
         goto Error;
@@ -923,8 +925,7 @@ cudaError_t visitAndBridgerAnalysisCuda(char * outbridger, char * outvisitlist, 
     }
 
     // Launch a kernel on the GPU.  (char * outbridger, char * outvisitlist, int * outframesbound, int * outevents, const char * timelinemap, const int nframes, const int nAAs, cudaDeviceProp &deviceProp)
-    visitAndBridgerAnalysisKernel << <gridSize, blockSize >> > (dev_outbridger, dev_outvisitlist, dev_outframesbound, dev_timelinemap, nframes, nAAs);
-
+    visitAndBridgerAnalysisKernel1D << <gridSize, blockSize>> > (dev_outbridger, dev_outvisitlist, dev_outframesbound, dev_timelinemap, nframes, nAAs, nwaters);
     // Check for any errors launching the kernel
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess) {
@@ -940,26 +941,24 @@ cudaError_t visitAndBridgerAnalysisCuda(char * outbridger, char * outvisitlist, 
         cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus);
         goto Error;
     }
-
     // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(outbridger, dev_outbridger, nframes * sizeof(char), cudaMemcpyDeviceToHost);
+    cudaStatus = cudaMemcpy(outbridger, dev_outbridger, nwaters * nframes * sizeof(char), cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaMemcpy failed!" << endl;
         goto Error;
     }
 
-    cudaStatus = cudaMemcpy(outvisitlist, dev_outvisitlist, nAAs * sizeof(char), cudaMemcpyDeviceToHost);
+    cudaStatus = cudaMemcpy(outvisitlist, dev_outvisitlist, nAAs * nwaters * sizeof(char), cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaMemcpy failed!" << endl;
         goto Error;
     }
 
-    cudaStatus = cudaMemcpy(outframesbound, dev_outframesbound, nframes * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaStatus = cudaMemcpy(outframesbound, dev_outframesbound, nwaters * nframes * sizeof(int), cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaMemcpy failed!" << endl;
         goto Error;
     }
-
     // delete all our device arrays
 Error:
     cudaFree(dev_outbridger);

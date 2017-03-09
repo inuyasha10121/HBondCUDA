@@ -26,7 +26,7 @@ char * csvpath = "D:\\CALB\\analysis.csv";
 int dt = 1;
 int hbondwindow = 5; //MUST BE ODD
 int windowthreshold = 4; //Inclusive
-float cudaMemPercentage = 0.15f;
+float cudaMemPercentage = 0.75f;
 
 //---------------------------------------------MAIN CODE BODY---------------------------------------------
 int index3d(int z, int y, int x, int xmax, int ymax)
@@ -492,7 +492,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
 
     //Water ID:, Bridger?:, Bulk?:, #AAs:, # Events:
     printf("Performing analysis.  This may take a while...\n");
-    fprintf(csvout, "Water ID:,Bridger?:,Bulk?:,# AAs:,# Events:\n");
+    fprintf(csvout, "Water ID:,Bridger?:,Bulk?:,# AAs:,# Events:,Total Time:\n");
 
     //-------------------------------------------------------------------GPU METHOD-------------------------------------------------------------------
 
@@ -517,13 +517,12 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     size_t memperwater = (sizeof(char) * numframes * numAAs);
 
     auto watersperiteration = floor(cudaFreeMem / memperwater); //The 100 is here because otherwise it the kernels take WAY too long, for some dumb reason
-    //int watersperiteration = floor(float(cudaFreeMem - (numframes * numAAs * sizeof(char))) / sizeof(char));
     if (watersperiteration == 0)
     {
         cout << "ERROR: Not enough memory to process a single frame.  Exiting..." << endl;
         return 1;
     }
-    //watersperiteration = 1000;   //TODO: This is just to appease the fucking watchdog timer.  Get rid of it.
+
     auto iterationsrequired = (int)ceil(numwaters / watersperiteration);
 
     //Initial reference setup
@@ -565,13 +564,43 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         {
             waters[i] = boundwaters[(curriteration * watersperiteration) + i];
         }
-        //auto gpuwaters = &waters[0];
-
-
 
         timelineMapCuda1D(timelinemap, gputimeline, gputllookup, hbondwindow, windowthreshold, tllookup[numframes], numframes, numAAs, currwaters, deviceProp);
-        //timelineMapCuda2D(timelinemap, gputimeline, gputllookup, gpuAAs, gpuwaters, hbondwindow, windowthreshold, tllookup[numframes], numframes, numAAs, currwaters, deviceProp);
-        //visitAndBridgerAnalysisCuda(bridgers, visited, framesbound, timelinemap, tllookup.size() - 1, boundAAs.size(), deviceProp);
+        visitAndBridgerAnalysisCuda1D(bridgers, visited, framesbound, timelinemap, numframes, numAAs, currwaters, deviceProp);
+
+        //Get bridger info, and lifetime info
+        vector<bool> bridgerlist;
+        bridgerlist.resize(currwaters);
+        vector<int> boundcount;
+        boundcount.resize(currwaters);
+        vector<int> totalbindingevents;
+        totalbindingevents.resize(currwaters);
+
+        for (int i = 0; i < numframes; i++)
+        {
+            for (int j = 0; j < currwaters; j++)
+            {
+                bridgerlist[j] = bridgerlist[j] || (bool)bridgers[(j * numframes) + i];
+                boundcount[j] += (framesbound[(j * numframes) + i] > 0);
+                totalbindingevents[j] += framesbound[(j * numframes) + i];
+            }
+        }
+
+        //Get list of visited AAs, and print out full results to file
+        for (int i = 0; i < currwaters; i++)
+        {
+            int visitedcount = 0;
+            for (int j = 0; j < numAAs; j++)
+            {
+                visitedcount += (bool)visited[(i * numAAs) + j];
+            }
+            //    fprintf(csvout, "Water ID:,Bridger?:,Bulk?:,# AAs:,# Events:,Total Time:\n");
+
+            fprintf(csvout, "%i,%s,%s,%i,%i\n", waters[i], bridgerlist[i] ? "true" : "false", (visitedcount > 1) ? "false" : "true", visitedcount, totalbindingevents[i], boundcount[i]);
+        }
+
+
+
 
         auto t2 = std::chrono::high_resolution_clock::now();
         auto elapsedtime = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
@@ -581,7 +610,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         int seconds = (int)(predictedtime / 1000) % 60;
         int minutes = (int)((predictedtime / (1000 * 60)) % 60);
         int hours = (int)((predictedtime / (1000 * 60 * 60)) % 24);
-        printf("\tPredicted time remaining: %i:%i:%i", hours, minutes, seconds);
+        printf("\tPredicted time remaining: %03i:%02i:%02i", hours, minutes, seconds);
 
         delete[] timelinemap;
         delete[] bridgers;
@@ -608,7 +637,6 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         {
             visits += (bool)visited[i];
         }
-        fprintf(csvout, "%i,%s,%s,%i,%i\n", boundwaters[currwater], bridger ? "true" : "false", (visits > 1) ? "false" : "true", visits, -1);
     }
     */
     //OLD CPU METHOD
