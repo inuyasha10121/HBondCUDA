@@ -492,7 +492,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
 
     //Water ID:, Bridger?:, Bulk?:, #AAs:, # Events:
     printf("Performing analysis.  This may take a while...\n");
-    fprintf(csvout, "Water ID:,Bridger?:,Bulk?:,# AAs:,# Events:,Total Time:\n");
+    fprintf(csvout, "Water ID:,Bridger?:,Bulk?:,# AAs:,# Events:,Total Time:,Visit List:\n");
 
     //-------------------------------------------------------------------GPU METHOD-------------------------------------------------------------------
 
@@ -589,14 +589,19 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         //Get list of visited AAs, and print out full results to file
         for (int i = 0; i < currwaters; i++)
         {
+            string visitedstring = "";
             int visitedcount = 0;
             for (int j = 0; j < numAAs; j++)
             {
-                visitedcount += (bool)visited[(i * numAAs) + j];
+                if (visited[(i * numAAs) + j])
+                {
+                    visitedcount++;
+                    visitedstring += boundAAs[j] + "|";
+                }
             }
-            //    fprintf(csvout, "Water ID:,Bridger?:,Bulk?:,# AAs:,# Events:,Total Time:\n");
+            //    fprintf(csvout, "Water ID:,Bridger?:,Bulk?:,# AAs:,# Events:,Total Time:,Visit List:\n");
 
-            fprintf(csvout, "%i,%s,%s,%i,%i\n", waters[i], bridgerlist[i] ? "true" : "false", (visitedcount > 1) ? "false" : "true", visitedcount, totalbindingevents[i], boundcount[i]);
+            fprintf(csvout, "%i,%s,%s,%i,%i,%i,%s\n", waters[i], bridgerlist[i] ? "true" : "false", (visitedcount > 1) ? "false" : "true", visitedcount, totalbindingevents[i], boundcount[i], visitedstring.c_str());
         }
 
 
