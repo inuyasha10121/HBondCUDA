@@ -183,7 +183,7 @@ __global__ void timelineMapKernel2D(char * outMap, int * timeline, int * tllooku
     }
 }
 
-__global__ void timelineMapKernel1D(char * outMap, int * timeline, int * tllookup, const int window, const int threshold, const int nframes, const int nAAs, const int nwaters)
+__global__ void timelineMapKernel1D(char * outMap, int * timeline, int * tllookup, const int window, const int threshold, const int offset, const int nframes, const int nAAs, const int nwaters)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < ((nframes - window) * nwaters * nAAs))
@@ -197,14 +197,14 @@ __global__ void timelineMapKernel1D(char * outMap, int * timeline, int * tllooku
             int searchb = tllookup[frame + currwindow + 1];
             for (int currsearch = tllookup[frame + currwindow]; currsearch < searchb; currsearch += 2)
             {
-                if ((timeline[currsearch] == AA) && (timeline[currsearch + 1] == water))
+                if ((timeline[currsearch] == AA) && (timeline[currsearch + 1] == (water + offset)))
                 {
                     boundframes++;
                 }
             }
         }
         __syncthreads();
-        outMap[i] = (boundframes >= threshold);
+        outMap[i] = (boundframes >= threshold) ? 1 : 0 ;
     }
 }
 
@@ -213,23 +213,22 @@ __global__ void visitAndBridgerAnalysisKernel1D(char * outbridger, char * outvis
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (i < (nframes * nwaters * nAAs))
+    if (i < (nframes * nwaters))
     {
         int frame = i / (nwaters * nAAs);
         int water = (i % (nwaters * nAAs)) / nwaters;
 
         int boundcount = 0;
-        for (int j = 0; j < nAAs; j++)
+        for (int j = 0; j < nAAs; ++j)
         {
-            if (timelinemap[(j + nwaters * (water + nframes * frame))])
+            if (timelinemap[(j + nwaters * (water + nframes * frame))] == 1)
             {
                 boundcount++;
-                outvisitlist[(water * nAAs) + j] = true;  //Might be unsafe
+                outvisitlist[(water * nAAs) + j] = 1;  //Might be unsafe
             }
         }
-        
-        outbridger[(water * nframes) + frame] = (boundcount > 1);
-        //outframesbound[(water * nframes) + frame] = boundcount;        
+        outframesbound[(water * nframes) + frame] = boundcount;
+        outbridger[(water * nframes) + frame] = (boundcount > 1) ? 1 : 0 ;
     }
 }
 
@@ -733,7 +732,7 @@ Error:
     return cudaStatus;
 }
 
-cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * tllookup, const int window, const int threshold, const int ntimeline, const int nframes, const int nAAs, const int nwaters, cudaDeviceProp &deviceProp)
+cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * tllookup, const int window, const int threshold, const int offset, const int ntimeline, const int nframes, const int nAAs, const int nwaters, cudaDeviceProp &deviceProp)
 {
     // define device arrays
     char * dev_outMap = 0;
@@ -750,13 +749,7 @@ cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * t
     printf("\n\nSTARTING BENCHMARKING:\n");
 #endif
     // Setup the kernel dimensions
-    /*
-    int occBlockSize;
-    int occMinGridSize;
-    int occGridSize;
-    cudaOccupancyMaxPotentialBlockSize(&occMinGridSize, &occBlockSize, timelineMapKernel1D, 0, nwaters * nframes * nAAs);
-    occGridSize = ((nwaters * nframes * nAAs) + occBlockSize - 1) / occBlockSize;
-    */
+
     // use div because it's more accurrate than the rounding BS
     auto gridDiv = div((nwaters * nframes * nAAs), deviceProp.maxThreadsPerBlock);
     auto gridY = gridDiv.quot;
@@ -819,8 +812,8 @@ cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * t
     printf("Memcpy elapsed time:  %3.3f ms \n", time);
     cudaEventRecord(start, 0);
 #endif
-
-    timelineMapKernel1D << <gridSize, blockSize >> > (dev_outMap, dev_timeline, dev_tllookup, window, threshold, nframes, nAAs, nwaters);
+    //__global__ void timelineMapKernel1D(char * outMap, int * timeline, int * tllookup, const int window, const int threshold, const int nframes, const int nAAs, const int nwaters)
+    timelineMapKernel1D << <gridSize, blockSize >> > (dev_outMap, dev_timeline, dev_tllookup, window, threshold, offset, nframes, nAAs, nwaters);
     // Check for any errors launching the kernel
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess) {
@@ -881,7 +874,7 @@ cudaError_t visitAndBridgerAnalysisCuda1D(char * outbridger, char * outvisitlist
     cudaError_t cudaStatus;
 
     // use div because it's more accurrate than the rounding BS
-    auto gridDiv = div(nframes, deviceProp.maxThreadsPerBlock);
+    auto gridDiv = div((nframes * nwaters), deviceProp.maxThreadsPerBlock);
     auto gridY = gridDiv.quot;
 
     // ass backwards way of rounding up (maybe use the same trick as above? It might be "faster")
@@ -924,7 +917,8 @@ cudaError_t visitAndBridgerAnalysisCuda1D(char * outbridger, char * outvisitlist
         goto Error;
     }
 
-    // Launch a kernel on the GPU.  (char * outbridger, char * outvisitlist, int * outframesbound, int * outevents, const char * timelinemap, const int nframes, const int nAAs, cudaDeviceProp &deviceProp)
+    // Launch a kernel on the GPU. 
+    //__global__ void visitAndBridgerAnalysisKernel1D(char * outbridger, char * outvisitlist, int * outframesbound, const char * timelinemap, const int nframes, const int nAAs, const int nwaters)
     visitAndBridgerAnalysisKernel1D << <gridSize, blockSize>> > (dev_outbridger, dev_outvisitlist, dev_outframesbound, dev_timelinemap, nframes, nAAs, nwaters);
     // Check for any errors launching the kernel
     cudaStatus = cudaGetLastError();
