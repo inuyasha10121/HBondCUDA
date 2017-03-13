@@ -517,6 +517,8 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     size_t memperwater = (sizeof(char) * numframes * numAAs);
 
     auto watersperiteration = floor(cudaFreeMem / memperwater); //The 100 is here because otherwise it the kernels take WAY too long, for some dumb reason
+    watersperiteration = 6; //TODO: TEST STUFF, REMOVE
+    printf("Waters per iteration: %i\n\n", (int)watersperiteration);
     if (watersperiteration == 0)
     {
         cout << "ERROR: Not enough memory to process a single frame.  Exiting..." << endl;
@@ -541,6 +543,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         if (numwaters - (curriteration * watersperiteration) < watersperiteration)
         {
             currwaters = numwaters - (curriteration * watersperiteration);
+            cout << "PING\n\n\n" << endl;
         }
         else
         {
@@ -548,79 +551,85 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         }
 
         //Setup the relevant arrays
-        vector<int> waters;
-        waters.resize(currwaters);
-        char * timelinemap = new char[numAAs * numframes * currwaters];
-        char * bridgers = new char[numframes * currwaters];
-        char * visited = new char[numAAs * currwaters];
-        int * framesbound = new int[numframes * currwaters];
-
-        fill(timelinemap, timelinemap + (numAAs * numframes * currwaters), false);
-        fill(bridgers, bridgers + (numframes * currwaters), false);
-        fill(visited, visited + (numAAs * currwaters), false);
-        fill(framesbound, framesbound + (numframes * currwaters), 0);
-
-        for (int i = 0; i < currwaters; i++)
+        if (currwaters > 0)
         {
-            waters[i] = boundwaters[(curriteration * watersperiteration) + i];
-        }
+            vector<int> waters;
+            waters.resize(currwaters);
+            char * timelinemap = new char[numAAs * numframes * currwaters];
+            char * bridgers = new char[numframes * currwaters];
+            char * visited = new char[numAAs * currwaters];
+            int * framesbound = new int[numframes * currwaters];
 
-        timelineMapCuda1D(timelinemap, gputimeline, gputllookup, hbondwindow, windowthreshold, tllookup[numframes], numframes, numAAs, currwaters, deviceProp);
-        visitAndBridgerAnalysisCuda1D(bridgers, visited, framesbound, timelinemap, numframes, numAAs, currwaters, deviceProp);
+            fill(timelinemap, timelinemap + (numAAs * numframes * currwaters), false);
+            fill(bridgers, bridgers + (numframes * currwaters), false);
+            fill(visited, visited + (numAAs * currwaters), false);
+            fill(framesbound, framesbound + (numframes * currwaters), 0);
 
-        //Get bridger info, and lifetime info
-        vector<bool> bridgerlist;
-        bridgerlist.resize(currwaters);
-        vector<int> boundcount;
-        boundcount.resize(currwaters);
-        vector<int> totalbindingevents;
-        totalbindingevents.resize(currwaters);
-
-        for (int i = 0; i < numframes; i++)
-        {
-            for (int j = 0; j < currwaters; j++)
+            for (int i = 0; i < currwaters; i++)
             {
-                bridgerlist[j] = bridgerlist[j] || (bool)bridgers[(j * numframes) + i];
-                boundcount[j] += (framesbound[(j * numframes) + i] > 0);
-                totalbindingevents[j] += framesbound[(j * numframes) + i];
+                waters[i] = boundwaters[(curriteration * watersperiteration) + i];
             }
-        }
 
-        //Get list of visited AAs, and print out full results to file
-        for (int i = 0; i < currwaters; i++)
-        {
-            string visitedstring = "";
-            int visitedcount = 0;
-            for (int j = 0; j < numAAs; j++)
+            timelineMapCuda1D(timelinemap, gputimeline, gputllookup, hbondwindow, windowthreshold, tllookup[numframes], numframes, numAAs, currwaters, deviceProp);
+            visitAndBridgerAnalysisCuda1D(bridgers, visited, framesbound, timelinemap, numframes, numAAs, currwaters, deviceProp);
+
+            //Get bridger info, and lifetime info
+            vector<bool> bridgerlist;
+            bridgerlist.resize(currwaters);
+            vector<int> boundcount;
+            boundcount.resize(currwaters);
+            vector<int> totalbindingevents;
+            totalbindingevents.resize(currwaters);
+
+            for (int i = 0; i < numframes; i++)
             {
-                if (visited[(i * numAAs) + j])
+                for (int j = 0; j < currwaters; j++)
                 {
-                    visitedcount++;
-                    visitedstring += boundAAs[j] + "|";
+                    bridgerlist[j] = bridgerlist[j] || (bool)bridgers[(j * numframes) + i];
+                    boundcount[j] += (framesbound[(j * numframes) + i] > 0);
+                    totalbindingevents[j] += framesbound[(j * numframes) + i];
                 }
             }
-            //    fprintf(csvout, "Water ID:,Bridger?:,Bulk?:,# AAs:,# Events:,Total Time:,Visit List:\n");
 
-            fprintf(csvout, "%i,%s,%s,%i,%i,%i,%s\n", waters[i], bridgerlist[i] ? "true" : "false", (visitedcount > 1) ? "false" : "true", visitedcount, totalbindingevents[i], boundcount[i], visitedstring.c_str());
+            //Get list of visited AAs, and print out full results to file
+            for (int i = 0; i < currwaters; i++)
+            {
+                vector<int> visitedlist;
+                for (int j = 0; j < numAAs; j++)
+                {
+                    if (visited[(i * numAAs) + j])
+                    {
+                        visitedlist.push_back(boundAAs[j]);
+                    }
+                }
+                //    fprintf(csvout, "Water ID:,Bridger?:,Bulk?:,# AAs:,# Events:,Total Time:,Visit List:\n");
+
+                fprintf(csvout, "%i,%s,%s,%i,%i,%i,", waters[i], bridgerlist[i] ? "true" : "false", (visitedlist.size() > 1) ? "false" : "true", visitedlist.size(), totalbindingevents[i], boundcount[i]);
+                for (int j = 0; j < visitedlist.size(); j++)
+                {
+                    fprintf(csvout, "%i,", visitedlist[j]);
+                }
+                fprintf(csvout, "\n");
+            }
+
+
+
+
+            auto t2 = std::chrono::high_resolution_clock::now();
+            auto elapsedtime = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
+            totaltime += elapsedtime;
+            auto predictedtime = (totaltime / (curriteration + 1) * (iterationsrequired - curriteration));
+
+            int seconds = (int)(predictedtime / 1000) % 60;
+            int minutes = (int)((predictedtime / (1000 * 60)) % 60);
+            int hours = (int)((predictedtime / (1000 * 60 * 60)) % 24);
+            printf("\tPredicted time remaining: %03i:%02i:%02i", hours, minutes, seconds);
+
+            delete[] timelinemap;
+            delete[] bridgers;
+            delete[] visited;
+            delete[] framesbound;
         }
-
-
-
-
-        auto t2 = std::chrono::high_resolution_clock::now();
-        auto elapsedtime = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
-        totaltime += elapsedtime;
-        auto predictedtime = (totaltime / (curriteration + 1) * (iterationsrequired - curriteration));
-
-        int seconds = (int)(predictedtime / 1000) % 60;
-        int minutes = (int)((predictedtime / (1000 * 60)) % 60);
-        int hours = (int)((predictedtime / (1000 * 60 * 60)) % 24);
-        printf("\tPredicted time remaining: %03i:%02i:%02i", hours, minutes, seconds);
-
-        delete[] timelinemap;
-        delete[] bridgers;
-        delete[] visited;
-        delete[] framesbound;
     }
 
 
