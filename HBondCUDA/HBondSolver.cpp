@@ -438,7 +438,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     {
         if (line.find("FRAME") != string::npos)
         {
-            //printf("\rCurrent line: %i", currline);
+            printf("\rCurrent line: %i", currline);
             tllookup.push_back(flattimeline.size());
         }
         else if (line.find(',') != string::npos)
@@ -492,10 +492,119 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
 
     //Water ID:, Bridger?:, Bulk?:, #AAs:, # Events:
     printf("Performing analysis.  This may take a while...\n");
-    fprintf(csvout, "Water ID:,Bridger?:,Bulk?:,# AAs:,# Events:,Total Time:,Visit List:\n");
 
     //-------------------------------------------------------------------GPU METHOD-------------------------------------------------------------------
+    fprintf(csvout, "Water ID:,Bridger?:,# Events:,Total Time:,Visit List:\n");
 
+    //New refactored code that goes based on AAs instead of waters
+    int numAAs = boundAAs.size();
+    int numFrames = (tllookup.size() - 1) - hbondwindow;  //Remove the hbond window, since we can't process those with the left-justified window style of analysis
+    int numWaters = boundwaters.size();
+
+    //Get memory parameters
+    size_t cudaFreeMem;
+    cudaError_t cudaResult = cudaMemGetInfo(&cudaFreeMem, NULL);
+
+    if (cudaResult != cudaSuccess)
+    {
+        cerr << "cudaMemGetInfo failed!" << endl;
+        printf("\nERROR: CUDA is unable to function.  Double check your installation/device settings.");
+        printf("\nExiting...");
+        return 1;
+    }
+
+    cudaFreeMem *= cudaMemPercentage; //Adjust memory available based on specified percentage
+    cudaFreeMem -= ((sizeof(int) * tllookup.size()) + (sizeof(int) * flattimeline.size()) + (sizeof(int) * numFrames) + (sizeof(char) * numAAs)); //Reserve space for the required information for the calculations
+    if (cudaFreeMem <= 0)
+    {
+        cout << "ERROR: Not enough memory to store the timeline information.  This trajectory may be too large to process." << endl;
+        cout << "Exitting..." << endl;
+        return 1;
+    }
+    size_t memPerAA = (sizeof(char) * numFrames);
+    auto numAAsPerCycle = (int)floor(cudaFreeMem / memPerAA);
+    if (numAAsPerCycle <= 0)
+    {
+        cout << "ERROR: Not enough memory to process one amino acid.  This trajectory may be too large to process." << endl;
+        cout << "Exitting..." << endl;
+        return 1;
+    }
+    cout << "DEBUG: Potential AAs per cycle: " << numAAsPerCycle << endl;
+    numAAsPerCycle = (int)min(numAAsPerCycle, numAAs);  //Make sure we don't accidentally try to calculate for amino acids that don't exist
+    cout << "Processing " << numAAsPerCycle << " amino acids per cycle." << endl;
+
+    //Arrays for storing results of CUDA kernels
+    int * interactionsPerFrame = new int[numFrames];
+    char * visitedAAs = new char[numAAs];
+
+    //Pointers for the existing data
+    auto gpuFlatTimeline = &flattimeline[0];
+    auto gpuTLlookup = &tllookup[0];
+
+    auto totaltime = 0;
+
+    for (int currWater = 0; currWater < numWaters; ++currWater)
+    {
+        cout << "\rProcessing " << currWater + 1 << " water of " << numWaters;
+        auto t1 = std::chrono::high_resolution_clock::now();
+        //Ensure the storage arrays are empty
+        fill(interactionsPerFrame, interactionsPerFrame + numFrames, 0);
+        fill(visitedAAs, visitedAAs + numAAs, 0);
+
+        //Run analysis over all the amino acid iteractions to the current water, over all frames
+        for (int offsetAA = 0; offsetAA < numAAs; offsetAA += numAAsPerCycle)
+        {
+            cudaResult = timelineMapCudaRefactored(interactionsPerFrame, visitedAAs, gpuFlatTimeline, gpuTLlookup, hbondwindow, windowthreshold, offsetAA, currWater, numFrames, numAAs, flattimeline.size(), tllookup.size(), deviceProp);
+            if (cudaResult != cudaSuccess) {
+                cerr << "Error launching CUDA analysis!" << endl;
+                cerr << "Exitting..." << endl;
+                goto Error;
+            }
+
+        }
+
+        //Process the resulting arrays
+        int totalInteractions = 0;
+        int numFramesBound = 0;
+        bool bridger = false;
+        for (int i = 0; i < numFrames; ++i)
+        {
+            totalInteractions += interactionsPerFrame[i];
+            numFramesBound += (interactionsPerFrame[i] > 0) ? 1 : 0;
+            bridger = bridger | (interactionsPerFrame[i] > 1);
+        }
+
+        //Print out the results
+        //    fprintf(csvout, "Water ID:,Bridger?:,# Events:,Total Time:,Visit List:\n");
+        fprintf(csvout, "%i,%s,%i,%i,", boundwaters[currWater], (bridger ? "true" : "false"), totalInteractions, numFramesBound);
+        for (int i = 0; i < numAAs; ++i)
+        {
+            if (visitedAAs[i] == 1)
+            {
+                fprintf(csvout, "%i,", boundAAs[i]);
+            }
+        }
+        fprintf(csvout, "\n");
+
+        auto t2 = std::chrono::high_resolution_clock::now();
+        auto elapsedtime = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
+        totaltime += elapsedtime;
+        auto predictedtime = (totaltime / (currWater + 1) * (numWaters - currWater));
+
+        int seconds = (int)(predictedtime / 1000) % 60;
+        int minutes = (int)((predictedtime / (1000 * 60)) % 60);
+        int hours = (int)((predictedtime / (1000 * 60 * 60)) % 24);
+        printf("\tPredicted time remaining: %03i:%02i:%02i", hours, minutes, seconds);
+
+    }
+
+    //Free up memory
+Error:
+    delete[] interactionsPerFrame;
+    delete[] visitedAAs;
+
+
+    /* OLD CODE
     int numAAs = boundAAs.size();
     int numframes = tllookup.size() - 1;
     int numwaters = boundwaters.size();
@@ -632,7 +741,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     }
 
 
-
+    */
     //TODO: This is fucking terrible.  Fix it.
     /*
     for (int currwater = 0; currwater < boundwaters.size(); currwater++)
