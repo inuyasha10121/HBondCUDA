@@ -494,16 +494,13 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     printf("Performing analysis.  This may take a while...\n");
 
     //-------------------------------------------------------------------GPU METHOD-------------------------------------------------------------------
-    fprintf(csvout, "Water ID:,Bridger?:,# Events:,Total Time:,Visit List:\n");
 
-    //New refactored code that goes based on AAs instead of waters
     int numAAs = boundAAs.size();
-    int numFrames = (tllookup.size() - 1) - hbondwindow;  //Remove the hbond window, since we can't process those with the left-justified window style of analysis
+    int numFrames = (tllookup.size() - 1) - hbondwindow;
     int numWaters = boundwaters.size();
 
-    //Get memory parameters
     size_t cudaFreeMem;
-    cudaError_t cudaResult = cudaMemGetInfo(&cudaFreeMem, NULL);
+    cudaError_t cudaResult = cudaMemGetInfo(&cudaFreeMem, NULL); //Get how much memory is available to use
 
     if (cudaResult != cudaSuccess)
     {
@@ -513,318 +510,102 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         return 1;
     }
 
-    cudaFreeMem *= cudaMemPercentage; //Adjust memory available based on specified percentage
-    cudaFreeMem -= ((sizeof(int) * tllookup.size()) + (sizeof(int) * flattimeline.size()) + (sizeof(int) * numFrames) + (sizeof(char) * numAAs)); //Reserve space for the required information for the calculations
-    if (cudaFreeMem <= 0)
+    cudaFreeMem *= cudaMemPercentage; //Adjust memory based on command line
+    cudaFreeMem -= ((sizeof(int) * flattimeline.size()) + (sizeof(int) * tllookup.size())); //Reserve space for timeline
+    cudaFreeMem -= ((sizeof(char) * numWaters * numAAs) + (sizeof(int) * numWaters * 2) + (sizeof(int) * numWaters)); //Reserve space for output (visit list, event information, temp mem for event info building)
+    if (cudaFreeMem < 1)
     {
-        cout << "ERROR: Not enough memory to store the timeline information.  This trajectory may be too large to process." << endl;
-        cout << "Exitting..." << endl;
+        cerr << "ERROR: Not enough memory to process the trajectory." << endl;
+        cerr << "Exitting..." << endl;
+        cin.get();
         return 1;
     }
-    size_t memPerAA = (sizeof(char) * numFrames);
-    auto numAAsPerCycle = (int)floor(cudaFreeMem / memPerAA);
-    if (numAAsPerCycle <= 0)
-    {
-        cout << "ERROR: Not enough memory to process one amino acid.  This trajectory may be too large to process." << endl;
-        cout << "Exitting..." << endl;
-        return 1;
-    }
-    cout << "DEBUG: Potential AAs per cycle: " << numAAsPerCycle << endl;
-    numAAsPerCycle = (int)min(numAAsPerCycle, numAAs);  //Make sure we don't accidentally try to calculate for amino acids that don't exist
-    cout << "Processing " << numAAsPerCycle << " amino acids per cycle." << endl;
-
-    //Arrays for storing results of CUDA kernels
-    int * interactionsPerFrame = new int[numFrames];
-    char * visitedAAs = new char[numAAs];
-
-    //Pointers for the existing data
     auto gpuFlatTimeline = &flattimeline[0];
-    auto gpuTLlookup = &tllookup[0];
+    auto gpuTLLookup = &tllookup[0];
 
-    auto totaltime = 0;
+    auto gpuVisitedList = new char[numWaters * numAAs];
+    fill(gpuVisitedList, gpuVisitedList + (numWaters * numAAs), 0);
+
+    auto gpuEventInformation = new int[numWaters * 2];
+    fill(gpuEventInformation, gpuEventInformation + (numWaters * 2), 0);
+
+    size_t memPerWater = sizeof(char) * numFrames * numAAs;
+    cout << "Processing waters..." << endl;
+    if (memPerWater > cudaFreeMem)
+    {
+        cerr << "ERROR: Not able to process one water at one time." << endl;
+        cerr << "Exitting..." << endl;
+        cin.get();
+        return 1;
+    }
+
+    //Process each water
+    auto gpuWaterInformation = new char[numAAs * numFrames];
+    auto gpuFrameEventInfo = new int[numFrames];
 
     for (int currWater = 0; currWater < numWaters; ++currWater)
     {
-        cout << "\rProcessing " << currWater + 1 << " water of " << numWaters;
-        auto t1 = std::chrono::high_resolution_clock::now();
-        //Ensure the storage arrays are empty
-        fill(interactionsPerFrame, interactionsPerFrame + numFrames, 0);
-        fill(visitedAAs, visitedAAs + numAAs, 0);
+        cout << "Processing water " << currWater + 1 << " of " << numWaters;
 
-        //Run analysis over all the amino acid iteractions to the current water, over all frames
-        for (int offsetAA = 0; offsetAA < numAAs; offsetAA += numAAsPerCycle)
-        {
-            cudaResult = timelineMapCudaRefactored(interactionsPerFrame, visitedAAs, gpuFlatTimeline, gpuTLlookup, hbondwindow, windowthreshold, offsetAA, currWater, numFrames, numAAs, flattimeline.size(), tllookup.size(), deviceProp);
-            if (cudaResult != cudaSuccess) {
-                cerr << "Error launching CUDA analysis!" << endl;
-                cerr << "Exitting..." << endl;
-                goto Error;
-            }
-
+        cudaResult =  timelineWindowCUDA(gpuWaterInformation, gpuFlatTimeline, gpuTLLookup, hbondwindow, windowthreshold, currWater, numAAs, numFrames, flattimeline.size(), tllookup.size(), deviceProp);
+        if (cudaResult != cudaSuccess) {
+            cerr << "ERROR: timelineWindowCUDA failed!" << endl;
+            cerr << "Exitting..." << endl;
+            cin.get();
+            return 1;
         }
 
-        //Process the resulting arrays
-        int totalInteractions = 0;
-        int numFramesBound = 0;
-        bool bridger = false;
-        for (int i = 0; i < numFrames; ++i)
-        {
-            totalInteractions += interactionsPerFrame[i];
-            numFramesBound += (interactionsPerFrame[i] > 0) ? 1 : 0;
-            bridger = bridger | (interactionsPerFrame[i] > 1);
+        cudaResult = visitListCUDA(gpuVisitedList, gpuWaterInformation, currWater, numAAs, numFrames, numWaters, deviceProp);
+        if (cudaResult != cudaSuccess) {
+            cerr << "ERROR: visitListCUDA failed!" << endl;
+            cerr << "Exitting..." << endl;
+            cin.get();
+            return 1;
         }
 
-        //Print out the results
-        //    fprintf(csvout, "Water ID:,Bridger?:,# Events:,Total Time:,Visit List:\n");
-        fprintf(csvout, "%i,%s,%i,%i,", boundwaters[currWater], (bridger ? "true" : "false"), totalInteractions, numFramesBound);
-        for (int i = 0; i < numAAs; ++i)
+        
+        cudaResult = eventListCUDA(gpuFrameEventInfo, gpuWaterInformation, numAAs, numFrames, deviceProp);
+        if (cudaResult != cudaSuccess) {
+            cerr << "ERROR: eventListCUDA failed!" << endl;
+            cerr << "Exitting..." << endl;
+            cin.get();
+            return 1;
+        }
+
+        for (int currFrame = 0; currFrame < numFrames; currFrame++)
         {
-            if (visitedAAs[i] == 1)
+            gpuEventInformation[(currWater * 2)] += gpuFrameEventInfo[currFrame];
+            gpuEventInformation[(currWater * 2) + 1] = (gpuFrameEventInfo[currFrame] > 0) ? 1 : 0;
+        }
+
+    }
+    delete[] gpuFrameEventInfo;
+    delete[] gpuWaterInformation;
+
+    
+    cout << "Done with processing!" << endl;
+    cin.get();
+
+    //Print results to file
+    cout << "Writing results to file..." << endl;
+    fprintf(csvout, "Water:,Visited List:,\n");
+    for (int i = 0; i < numWaters; i++)
+    {
+        fprintf(csvout, "%i,", boundwaters[i]);
+        //Write visited list
+        for (int j = 0; j < numAAs; j++)
+        {
+            if (gpuVisitedList[(numAAs * i) + j] == 1)
             {
-                fprintf(csvout, "%i,", boundAAs[i]);
+                fprintf(csvout, "%i,", boundAAs[j]);
             }
         }
         fprintf(csvout, "\n");
-
-        auto t2 = std::chrono::high_resolution_clock::now();
-        auto elapsedtime = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
-        totaltime += elapsedtime;
-        auto predictedtime = (totaltime / (currWater + 1) * (numWaters - currWater));
-
-        int seconds = (int)(predictedtime / 1000) % 60;
-        int minutes = (int)((predictedtime / (1000 * 60)) % 60);
-        int hours = (int)((predictedtime / (1000 * 60 * 60)) % 24);
-        printf("\tPredicted time remaining: %03i:%02i:%02i", hours, minutes, seconds);
-
     }
-
-    //Free up memory
-Error:
-    delete[] interactionsPerFrame;
-    delete[] visitedAAs;
-
-
-    /* OLD CODE
-    int numAAs = boundAAs.size();
-    int numframes = tllookup.size() - 1;
-    int numwaters = boundwaters.size();
-
-    //Get memory parameters
-    size_t cudaFreeMem;
-    cudaError_t cudaResult = cudaMemGetInfo(&cudaFreeMem, NULL);
-
-    if (cudaResult != cudaSuccess)
-    {
-        cerr << "cudaMemGetInfo failed!" << endl;
-        printf("\nERROR: CUDA is unable to function.  Double check your installation/device settings.");
-        printf("\nExiting...");
-        return 1;
-    }
-
-    cudaFreeMem *= cudaMemPercentage;
-    cudaFreeMem -= ((sizeof(int) * tllookup[numframes]) + (sizeof(int) * numframes));
-    size_t memperwater = (sizeof(char) * numframes * numAAs);
-
-    auto watersperiteration = floor(cudaFreeMem / memperwater); 
-    //watersperiteration = 420; //TODO: TEST STUFF, REMOVE
-    printf("Waters per iteration: %i\n\n", (int)watersperiteration);
-    if (watersperiteration == 0)
-    {
-        cout << "ERROR: Not enough memory to process a single frame.  Exiting..." << endl;
-        return 1;
-    }
-
-    auto iterationsrequired = (int)ceil(numwaters / watersperiteration);
-
-    //Initial reference setup
-    auto gpuAAs = &boundAAs[0];
-    auto gputimeline = &flattimeline[0];
-    auto gputllookup = &tllookup[0];
-
-    auto totaltime = 0;
-    for(int curriteration = 0; curriteration < iterationsrequired; curriteration++)
-    {
-        printf("\rProcessing water set %i of %i", curriteration, iterationsrequired);
-        auto t1 = std::chrono::high_resolution_clock::now();
-
-        //Find out how many waters to process this iteration
-        int currwaters = 0;
-        if (numwaters - (curriteration * watersperiteration) < watersperiteration)
-        {
-            currwaters = numwaters - (curriteration * watersperiteration);
-        }
-        else
-        {
-            currwaters = watersperiteration;
-        }
-
-        //Setup the relevant arrays
-        if (currwaters > 0)
-        {
-            vector<int> waters;
-            waters.resize(currwaters);
-            char * timelinemap = new char[numAAs * numframes * currwaters];
-            char * bridgers = new char[numframes * currwaters];
-            char * visited = new char[numAAs * currwaters];
-            int * framesbound = new int[numframes * currwaters];
-
-            fill(timelinemap, timelinemap + (numAAs * numframes * currwaters), 0);
-            fill(bridgers, bridgers + (numframes * currwaters), 0);
-            fill(visited, visited + (numAAs * currwaters), 0);
-            fill(framesbound, framesbound + (numframes * currwaters), 0);
-
-            for (int i = 0; i < currwaters; i++)
-            {
-                waters[i] = boundwaters[(curriteration * watersperiteration) + i];
-            }
-
-            timelineMapCuda1D(timelinemap, gputimeline, gputllookup, hbondwindow, windowthreshold, (curriteration * watersperiteration), tllookup[numframes], numframes, numAAs, currwaters, deviceProp);
-            visitAndBridgerAnalysisCuda1D(bridgers, visited, framesbound, timelinemap, numframes, numAAs, currwaters, deviceProp);
-
-            //Get bridger info, and lifetime info
-            vector<bool> bridgerlist;
-            bridgerlist.resize(currwaters);
-            vector<int> boundcount;
-            boundcount.resize(currwaters);
-            vector<int> totalbindingevents;
-            totalbindingevents.resize(currwaters);
-
-            for (int i = 0; i < numframes; i++)
-            {
-                for (int j = 0; j < currwaters; j++)
-                {
-                    bridgerlist[j] = bridgerlist[j] || (bridgers[(j * numframes) + i] == 1);
-                    boundcount[j] += (framesbound[(j * numframes) + i] > 0);
-                    totalbindingevents[j] += framesbound[(j * numframes) + i];
-                }
-            }
-
-            //Get list of visited AAs, and print out full results to file
-            for (int i = 0; i < currwaters; i++)
-            {
-                vector<int> visitedlist;
-                for (int j = 0; j < numAAs; j++)
-                {
-                    if (visited[(i * numAAs) + j] == 1)
-                    {
-                        visitedlist.push_back(boundAAs[j]);
-                    }
-                }
-                //    fprintf(csvout, "Water ID:,Bridger?:,Bulk?:,# AAs:,# Events:,Total Time:,Visit List:\n");
-
-                fprintf(csvout, "%i,%s,%s,%i,%i,%i,", waters[i], bridgerlist[i] == 1 ? "true" : "false", (visitedlist.size() > 1) ? "false" : "true", visitedlist.size(), totalbindingevents[i], boundcount[i]);
-                for (int j = 0; j < visitedlist.size(); j++)
-                {
-                    fprintf(csvout, "%i,", visitedlist[j]);
-                }
-                fprintf(csvout, "\n");
-            }
+    cin.get();
 
 
 
-
-            auto t2 = std::chrono::high_resolution_clock::now();
-            auto elapsedtime = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
-            totaltime += elapsedtime;
-            auto predictedtime = (totaltime / (curriteration + 1) * (iterationsrequired - curriteration));
-
-            int seconds = (int)(predictedtime / 1000) % 60;
-            int minutes = (int)((predictedtime / (1000 * 60)) % 60);
-            int hours = (int)((predictedtime / (1000 * 60 * 60)) % 24);
-            printf("\tPredicted time remaining: %03i:%02i:%02i", hours, minutes, seconds);
-
-            delete[] timelinemap;
-            delete[] bridgers;
-            delete[] visited;
-            delete[] framesbound;
-        }
-    }
-
-
-    */
-    //TODO: This is fucking terrible.  Fix it.
-    /*
-    for (int currwater = 0; currwater < boundwaters.size(); currwater++)
-    {
-
-        bool bridger = false;
-        int visits = 0;
-        int totalframes = 0;
-        for (int i = 0; i < tllookup.size() - 1; i++)
-        {
-            bridger = bridger || (bool)bridgers[i];
-            totalframes += (bool)framesbound[i];
-        }
-        for (int i = 0; i < boundAAs.size(); i++)
-        {
-            visits += (bool)visited[i];
-        }
-    }
-    */
-    //OLD CPU METHOD
-    /*
-    //Binding edges descibes how many transition events happened, which roughly quantifies how frequently the water participated in hbonding
-    vector<int> bindingedges;
-    bindingedges.resize(boundAAs.size());
-    vector<bool> bridger;
-    bridger.resize(boundwaters.size());
-    fill(bridger.begin(), bridger.end(), false); //Likely un-necessary, but just in case.
-    for (int nwater = 0; nwater < boundwaters.size(); nwater++)
-    {
-        int numevents = 0;
-        vector<int> visitedlist;
-        fill(bindingedges.begin(), bindingedges.end(), 0);
-        printf("\rProcessing water %i of %i", nwater + 1, boundwaters.size());
-        for (int nframe = 0; nframe < timeline.size() - hbondwindow; nframe++)
-        {
-            int boundcount = 0;
-            for (int nprot = 0; nprot < boundAAs.size(); nprot++)
-            {
-                int boundframes = 0;
-                for (int nwindow = 0; nwindow < hbondwindow; nwindow++)
-                {
-                    for (int nsearch = 0; nsearch < timeline[nframe + nwindow].size(); nsearch++)
-                    {
-                        if ((timeline[nframe + nwindow][nsearch][0] == boundAAs[nprot]) && (timeline[nframe + nwindow][nsearch][1] == boundwaters[nwater]))
-                        {
-                            boundframes++;
-                        }
-                    }
-                }
-                if (((boundframes >= 4) && (bindingedges[nprot] % 2 == 0)) || ((boundframes < 4) && (bindingedges[nprot] % 2 == 1)))
-                {
-                    bindingedges[nprot]++;
-                    numevents++;
-                }
-                if (bindingedges[nprot] % 2 == 1)
-                {
-                    boundcount++;
-                    if (visitedlist.empty())
-                    {
-                        visitedlist.push_back(boundAAs[nprot]);
-                    }
-                    else
-                    {
-                        if (find(visitedlist.begin(), visitedlist.end(), boundAAs[nprot]) == visitedlist.end())
-                        {
-                            visitedlist.push_back(boundAAs[nprot]);
-                        }
-                    }
-                }
-            }
-
-            if (boundcount > 1)
-            {
-                bridger[nwater] = true;
-            }
-            if (boundcount > 4)
-            {
-                printf("WARNING: More than 4 partners found on a water.\n");
-            }
-        }
-        fprintf(csvout, "%i,%s,%s,%i,%i\n", boundwaters[nwater], bridger[nwater] ? "true" : "false", (visitedlist.size() > 1) ? "false" : "true", visitedlist.size(), numevents);
-    }
-    */
     printf("\n\nDone with analysis!\n");
 
 #if DEBUG
