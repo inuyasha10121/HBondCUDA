@@ -512,7 +512,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
 
     cudaFreeMem *= cudaMemPercentage; //Adjust memory based on command line
     cudaFreeMem -= ((sizeof(int) * flattimeline.size()) + (sizeof(int) * tllookup.size())); //Reserve space for timeline
-    cudaFreeMem -= ((sizeof(char) * numWaters * numAAs) + (sizeof(int) * numWaters * 2) + (sizeof(int) * numWaters)); //Reserve space for output (visit list, event information, temp mem for event info building)
+    cudaFreeMem -= ((sizeof(char) * numAAs) + (sizeof(int) * 2) + (sizeof(int) * numFrames)); //Reserve space for output (visit list, event information, temp mem for event info building)
     if (cudaFreeMem < 1)
     {
         cerr << "ERROR: Not enough memory to process the trajectory." << endl;
@@ -522,12 +522,6 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     }
     auto gpuFlatTimeline = &flattimeline[0];
     auto gpuTLLookup = &tllookup[0];
-
-    auto gpuVisitedList = new char[numWaters * numAAs];
-    fill(gpuVisitedList, gpuVisitedList + (numWaters * numAAs), 0);
-
-    auto gpuEventInformation = new int[numWaters * 2];
-    fill(gpuEventInformation, gpuEventInformation + (numWaters * 2), 0);
 
     size_t memPerWater = sizeof(char) * numFrames * numAAs;
     cout << "Processing waters..." << endl;
@@ -539,15 +533,23 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         return 1;
     }
 
+    //Write the csv file header
+    fprintf(csvout, "Water ID:,Bridger?,# Events:, # Frames Bound:,Visit List:,\n");
+
     //Process each water
-    auto gpuWaterInformation = new char[numAAs * numFrames];
-    auto gpuFrameEventInfo = new int[numFrames];
+    auto gpuVisitedList = new char[numAAs]; //List of visited amino acids
+    auto gpuWaterInformation = new char[numAAs * numFrames];  //"2D" matrix of the true hydrogen bonds
+    auto gpuFrameEventInfo = new int[numFrames];  //Temporary matrix of hydrogen bond information over frames
+
+    auto totaltime = 0;
 
     for (int currWater = 0; currWater < numWaters; ++currWater)
     {
-        cout << "Processing water " << currWater + 1 << " of " << numWaters;
+        cout << "\rProcessing water " << currWater + 1 << " of " << numWaters;
+        auto t1 = std::chrono::high_resolution_clock::now();
 
-        cudaResult =  timelineWindowCUDA(gpuWaterInformation, gpuFlatTimeline, gpuTLLookup, hbondwindow, windowthreshold, currWater, numAAs, numFrames, flattimeline.size(), tllookup.size(), deviceProp);
+        //Perform analysis kernels
+        cudaResult =  timelineWindowCUDA(gpuWaterInformation, gpuFlatTimeline, gpuTLLookup, hbondwindow, windowthreshold, currWater, numAAs, numFrames - hbondwindow, flattimeline.size(), tllookup.size(), deviceProp);
         if (cudaResult != cudaSuccess) {
             cerr << "ERROR: timelineWindowCUDA failed!" << endl;
             cerr << "Exitting..." << endl;
@@ -555,7 +557,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
             return 1;
         }
 
-        cudaResult = visitListCUDA(gpuVisitedList, gpuWaterInformation, currWater, numAAs, numFrames, numWaters, deviceProp);
+        cudaResult = visitListCUDA(gpuVisitedList, gpuWaterInformation, numAAs, numFrames - hbondwindow, deviceProp);
         if (cudaResult != cudaSuccess) {
             cerr << "ERROR: visitListCUDA failed!" << endl;
             cerr << "Exitting..." << endl;
@@ -564,53 +566,52 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         }
 
         
-        cudaResult = eventListCUDA(gpuFrameEventInfo, gpuWaterInformation, numAAs, numFrames, deviceProp);
+        cudaResult = eventListCUDA(gpuFrameEventInfo, gpuWaterInformation, numAAs, numFrames - hbondwindow, deviceProp);
         if (cudaResult != cudaSuccess) {
             cerr << "ERROR: eventListCUDA failed!" << endl;
             cerr << "Exitting..." << endl;
             cin.get();
             return 1;
         }
-
-        for (int currFrame = 0; currFrame < numFrames; currFrame++)
+        
+        //Harvest the data and print the results to file
+        int totalEvents = 0, framesBound = 0;
+        for (int currFrame = 0; currFrame < numFrames - hbondwindow; ++currFrame)
         {
-            gpuEventInformation[(currWater * 2)] += gpuFrameEventInfo[currFrame];
-            gpuEventInformation[(currWater * 2) + 1] = (gpuFrameEventInfo[currFrame] > 0) ? 1 : 0;
+            totalEvents += gpuFrameEventInfo[currFrame];
+            framesBound += (gpuFrameEventInfo[currFrame] > 0) ? 1 : 0;
         }
 
-    }
-    delete[] gpuFrameEventInfo;
-    delete[] gpuWaterInformation;
-
-    
-    cout << "Done with processing!" << endl;
-    cin.get();
-
-    //Print results to file
-    cout << "Writing results to file..." << endl;
-    fprintf(csvout, "Water:,Visited List:,\n");
-    for (int i = 0; i < numWaters; i++)
-    {
-        fprintf(csvout, "%i,", boundwaters[i]);
-        //Write visited list
-        for (int j = 0; j < numAAs; j++)
+        //    fprintf(csvout, "Water ID:,Bridger?,# Events:,# Frames Bound:,Visit List:,\n");
+        fprintf(csvout, "%i,%s,%i,%i,", boundwaters[currWater], (totalEvents != framesBound) ? "true" : "false", totalEvents, framesBound);
+        
+        //This feels wrong as fuck.  
+        for (int currAA = 0; currAA < numAAs; ++currAA)
         {
-            if (gpuVisitedList[(numAAs * i) + j] == 1)
+            if (gpuVisitedList[currAA] == 1)
             {
-                fprintf(csvout, "%i,", boundAAs[j]);
+                fprintf(csvout, "%i,", boundAAs[currAA]);
             }
         }
         fprintf(csvout, "\n");
+        fflush(csvout);
+
+        auto t2 = std::chrono::high_resolution_clock::now();
+        auto elapsedtime = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
+        totaltime += elapsedtime;
+        auto predictedtime = (totaltime / (currWater + 1) * (numWaters - currWater));
+
+        int seconds = (int)(predictedtime / 1000) % 60;
+        int minutes = (int)((predictedtime / (1000 * 60)) % 60);
+        int hours = (int)((predictedtime / (1000 * 60 * 60)) % 24);
+        printf("\tPredicted time remaining: %03i:%02i:%02i", hours, minutes, seconds);
     }
-    cin.get();
-
-
+    delete[] gpuVisitedList;
+    delete[] gpuFrameEventInfo;
+    delete[] gpuWaterInformation;
 
     printf("\n\nDone with analysis!\n");
 
-#if DEBUG
-    cin.get();
-#endif
-    
+    cin.get();    
     return 0;
 }

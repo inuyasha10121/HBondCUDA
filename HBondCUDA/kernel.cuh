@@ -22,7 +22,7 @@ cudaError_t timelineMapCuda1D(char * outMap, const int * timeline, const int * t
     const int ntimeline, const int nframes, const int nAAs, const int nwaters, cudaDeviceProp &deviceProp);
 cudaError_t timelineWindowCUDA(char * outTimeline, int * inFlatTimeline, int * inTLLookup, const int window, const int threshold, const int currWater, const int numAAs,
     const int numFrames, const int numTimeline, const int numTLLookup, cudaDeviceProp &deviceProp);
-cudaError_t visitListCUDA(char * outVisitList, char * inTimeline, const int currWater, const int numAAs, const int numFrames, const int numWaters, cudaDeviceProp &deviceProp);
+cudaError_t visitListCUDA(char * outVisitList, char * inTimeline, const int numAAs, const int numFrames, cudaDeviceProp &deviceProp);
 cudaError_t eventListCUDA(int * outTempEventList, char * inTimeline, const int numAAs, const int numFrames, cudaDeviceProp &deviceProp);
 
 #endif
