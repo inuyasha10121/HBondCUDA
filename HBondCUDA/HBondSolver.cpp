@@ -27,6 +27,7 @@ int dt = 1;
 int hbondwindow = 5; //MUST BE ODD
 int windowthreshold = 4; //Inclusive
 float cudaMemPercentage = 0.75f;
+bool tm = false; //FOR DEBUGGING ONLY, REMOVE THIS LATER
 
 //---------------------------------------------MAIN CODE BODY---------------------------------------------
 int index3d(int z, int y, int x, int xmax, int ymax)
@@ -35,6 +36,8 @@ int index3d(int z, int y, int x, int xmax, int ymax)
 }
 
 int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp);
+int debugCPUMethod(vector<int> & tllookup, vector<int> & flattimeline, vector<int> & boundwaters, vector<int> & boundAAs);
+int debugMimicMethod(vector<int> & tllookup, vector<int> & flattimeline, vector<int> & boundwaters, vector<int> & boundAAs);
 
 int main(int argc, char **argv)
 {   
@@ -93,6 +96,11 @@ int main(int argc, char **argv)
         cout << "Run \"" << argv[0] << " -help\" for more details." << endl;
 
         return 1;
+    }
+
+    if (checkCmdLineFlag(argc, (const char**)argv, "tm"))
+    {
+        tm = true;
     }
 
     cudaDeviceProp deviceProp = setupCUDA();
@@ -474,6 +482,13 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     tllookup.push_back(flattimeline.size());
     logfile.close();
     printf("\nDone!\n");
+
+    //TODO: THIS IS FOR DEBUGGING ONLY, REMOVE IT
+    if (tm)
+    {
+        return debugMimicMethod(tllookup, flattimeline, boundwaters, boundAAs);
+    }
+
     //Start doing analysis
 
     printf("Number waters involved in hydrogen bonding: %i\n", boundwaters.size());
@@ -524,7 +539,6 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     auto gpuTLLookup = &tllookup[0];
 
     size_t memPerWater = sizeof(char) * numFrames * numAAs;
-    cout << "Processing waters..." << endl;
     if (memPerWater > cudaFreeMem)
     {
         cerr << "ERROR: Not able to process one water at one time." << endl;
@@ -532,16 +546,19 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         cin.get();
         return 1;
     }
+    cout << "Able to process " << (int)(cudaFreeMem / memPerWater) << " waters per cycle." << endl;
+    cout << "Processing waters..." << endl;
 
     //Write the csv file header
     fprintf(csvout, "Water ID:,Bridger?,# Events:, # Frames Bound:,Visit List:,\n");
 
     //Process each water
     auto gpuVisitedList = new char[numAAs]; //List of visited amino acids
-    auto gpuWaterInformation = new char[numAAs * numFrames];  //"2D" matrix of the true hydrogen bonds
+    auto gpuTemp2DMatrix = new char[numAAs * numFrames];  //"2D" matrix of the true hydrogen bonds
     auto gpuFrameEventInfo = new int[numFrames];  //Temporary matrix of hydrogen bond information over frames
 
     auto totaltime = 0;
+
 
     for (int currWater = 0; currWater < numWaters; ++currWater)
     {
@@ -549,7 +566,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         auto t1 = std::chrono::high_resolution_clock::now();
 
         //Perform analysis kernels
-        cudaResult =  timelineWindowCUDA(gpuWaterInformation, gpuFlatTimeline, gpuTLLookup, hbondwindow, windowthreshold, currWater, numAAs, numFrames - hbondwindow, flattimeline.size(), tllookup.size(), deviceProp);
+        cudaResult =  timelineWindowCUDA(gpuTemp2DMatrix, gpuFlatTimeline, gpuTLLookup, hbondwindow, windowthreshold, currWater, numAAs, numFrames, flattimeline.size(), tllookup.size(), deviceProp);
         if (cudaResult != cudaSuccess) {
             cerr << "ERROR: timelineWindowCUDA failed!" << endl;
             cerr << "Exitting..." << endl;
@@ -557,16 +574,72 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
             return 1;
         }
 
-        cudaResult = visitListCUDA(gpuVisitedList, gpuWaterInformation, numAAs, numFrames - hbondwindow, deviceProp);
+
+        //DEBUG STUFF-------------------------------------------------------------------------------------------------
+        
+        //MIMICS timelineWindowCUDA
+        /*
+        auto memtable = new char[numAAs * numFrames];
+        for (int i = 0; i < (numFrames * numAAs); ++i)
+        {
+            int currFrame = i / numAAs;
+            int currAA = i % numAAs;
+            int boundframes = 0;
+            for (int currWindow = 0; currWindow < hbondwindow; ++currWindow)
+            {
+                int searchEnd = tllookup[currFrame + currWindow + 1];
+                for (int searchPos = tllookup[currFrame + currWindow]; searchPos < searchEnd; searchPos += 2)
+                {
+                    if (flattimeline[searchPos] == currAA && flattimeline[searchPos + 1] == currWater)
+                    {
+                        boundframes++;
+                    }
+                }
+            }
+            if (boundframes >= windowthreshold)
+            {
+                memtable[i] = 1;
+            }
+            else
+            {
+                memtable[i] = 0;
+            }
+        }
+        //344
+        int errorcount = 0;
+        for (int i = 0; i < numAAs * numFrames; ++i)
+        {
+            if (memtable[i] != gpuTemp2DMatrix[i])
+            {
+                int currFrame = i / numAAs;
+                int currAA = i % numAAs;
+
+                cout << "<ERROR> Frame: " << currFrame << "\tAA: " << boundAAs[currAA] << "(" << currAA << ")" << "\tF/E: " << ((gpuTemp2DMatrix[i] == 1) ? "1" : "0") << "," << ((memtable[i] == 1) ? "1" : "0") << endl;
+                ++errorcount;
+                cin.get();
+            }
+        }
+        if (errorcount > 0)
+        {
+            cout << "ERRORS FOUND: " << errorcount << endl << endl;
+            cin.get();
+        }
+
+        delete[] memtable;
+        */
+        //DEBUG STUFF-------------------------------------------------------------------------------------------------
+
+
+
+        cudaResult = visitListCUDA(gpuVisitedList, gpuTemp2DMatrix, numAAs, numFrames, deviceProp);
         if (cudaResult != cudaSuccess) {
             cerr << "ERROR: visitListCUDA failed!" << endl;
             cerr << "Exitting..." << endl;
             cin.get();
             return 1;
         }
-
         
-        cudaResult = eventListCUDA(gpuFrameEventInfo, gpuWaterInformation, numAAs, numFrames - hbondwindow, deviceProp);
+        cudaResult = eventListCUDA(gpuFrameEventInfo, gpuTemp2DMatrix, numAAs, numFrames, deviceProp);
         if (cudaResult != cudaSuccess) {
             cerr << "ERROR: eventListCUDA failed!" << endl;
             cerr << "Exitting..." << endl;
@@ -576,7 +649,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         
         //Harvest the data and print the results to file
         int totalEvents = 0, framesBound = 0;
-        for (int currFrame = 0; currFrame < numFrames - hbondwindow; ++currFrame)
+        for (int currFrame = 0; currFrame < numFrames; ++currFrame)
         {
             totalEvents += gpuFrameEventInfo[currFrame];
             framesBound += (gpuFrameEventInfo[currFrame] > 0) ? 1 : 0;
@@ -608,10 +681,217 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     }
     delete[] gpuVisitedList;
     delete[] gpuFrameEventInfo;
-    delete[] gpuWaterInformation;
+    delete[] gpuTemp2DMatrix;
 
     printf("\n\nDone with analysis!\n");
 
     cin.get();    
+    return 0;
+}
+
+int debugCPUMethod(vector<int> & tllookup, vector<int> & flattimeline, vector<int> & boundwaters, vector<int> & boundAAs)
+{
+    int tlsize = tllookup.size();
+    int ftsize = flattimeline.size();
+    int nwaters = boundwaters.size();
+    int naas = boundAAs.size();
+    int numframes = (tllookup.size() - 1) - hbondwindow;
+
+    int targetwater = 1;
+    while (targetwater > 0)
+    {
+        cout << "ENTER TEST WATER VALUE (0 to exit):" << endl;
+        string request;
+        getline(cin, request);
+        targetwater = stoi(request);
+
+        bool watercheck = false;
+        auto waterpos = find(boundwaters.begin(), boundwaters.end(), targetwater);
+
+        if (waterpos != boundwaters.end())
+        {
+            int currwater = distance(boundwaters.begin(), waterpos);
+            int totalevents = 0, totalframes = 0;
+            vector<bool> visitlist;
+            visitlist.resize(naas);
+            fill(visitlist.begin(), visitlist.end(), false);
+
+            vector<bool> tempframelist;
+            tempframelist.resize(numframes);
+            fill(tempframelist.begin(), tempframelist.end(), false);
+
+            cout << "Processing AA 0 of " << naas;
+
+            for (int currAA = 0; currAA < naas; ++currAA)
+            {
+                cout << "\rProcessing AA " << currAA + 1 << " of " << naas;
+                for (int currframe = 0; currframe < numframes; ++currframe)
+                {
+                    int boundframes = 0;
+                    for (int currwindow = 0; currwindow < hbondwindow; ++currwindow)
+                    {
+                        int searchend = tllookup[currframe + currwindow + 1];
+                        for (int searchpos = tllookup[currframe + currwindow]; searchpos < searchend; searchpos += 2)
+                        {
+                            if (flattimeline[searchpos] == currAA && flattimeline[searchpos + 1] == currwater)
+                            {
+                                ++boundframes;
+                            }
+                        }
+                    }
+                    if (boundframes >= windowthreshold)
+                    {
+                        visitlist[currAA] = true;
+                        tempframelist[currframe] = true;
+                        ++totalevents;
+                    }
+                }
+            }
+            for (int i = 0; i < numframes; i++)
+            {
+                if (tempframelist[i])
+                {
+                    ++totalframes;
+                }
+            }
+            cout << "\rTE: " << totalevents << "\tTF:" << totalframes << " \t\t\t   " << endl;
+            for (int i = 0; i < naas; i++)
+            {
+                if (visitlist[i])
+                {
+                    cout << boundAAs[i] << ",";
+                }
+            }
+            cout << endl << endl;
+        }
+        else
+        {
+            cout << "WATER NOT FOUND!" << endl;
+        }
+    }
+    return 0;
+}
+
+int debugMimicMethod(vector<int> & tllookup, vector<int> & flattimeline, vector<int> & boundwaters, vector<int> & boundAAs)
+{
+    int tlsize = tllookup.size();
+    int ftsize = flattimeline.size();
+    int nwaters = boundwaters.size();
+    int nAAs = boundAAs.size();
+    int nframes = (tllookup.size() - 1) - hbondwindow;
+
+    cout << tlsize << endl;
+    cout << ftsize << endl;
+    cout << nwaters << endl;
+    cout << nAAs << endl;
+    cout << nframes << endl;
+    cout << endl;
+
+    int targetwater = 1;
+    while (targetwater > 0)
+    {
+        cout << "ENTER TEST WATER VALUE (0 to exit):" << endl;
+        string request;
+        getline(cin, request);
+        targetwater = stoi(request);
+
+        bool watercheck = false;
+        auto waterpos = find(boundwaters.begin(), boundwaters.end(), targetwater);
+
+        if (waterpos != boundwaters.end())
+        {
+            int currwater = distance(boundwaters.begin(), waterpos);
+            auto memtable = new char[nAAs * nframes];
+            auto framesums = new int[nframes];
+            auto visitlist = new char[nAAs];
+            fill(memtable, memtable + (nAAs * nframes), 0);
+            fill(framesums, framesums + nframes, 0);
+            fill(visitlist, visitlist + nAAs, 0);
+            int boundframes = 0;
+
+            //MIMICS timelineWindowCUDA
+            for (int i = 0; i < (nframes * nAAs); ++i)
+            {
+                int currFrame = i / nAAs;
+                int currAA = i % nAAs;
+                int boundframes = 0;
+                for (int currWindow = 0; currWindow < hbondwindow; ++currWindow)
+                {
+                    int searchEnd = tllookup[currFrame + currWindow + 1];
+                    for (int searchPos = tllookup[currFrame + currWindow]; searchPos < searchEnd; searchPos += 2)
+                    {
+                        if (flattimeline[searchPos] == currAA && flattimeline[searchPos + 1] == currwater)
+                        {
+                            boundframes++;
+                        }
+                    }
+                }
+                if (boundframes >= windowthreshold)
+                {
+                    memtable[i] = 1;
+                }
+                else
+                {
+                    memtable[i] = 0;
+                }
+            }
+
+            //MIMICS visitListCUDA
+            for (int i = 0; i < nAAs; ++i)
+            {
+                visitlist[i] = 0;
+                for (int currFrame = 0; currFrame < nframes; ++currFrame)
+                {
+                    if (memtable[(currFrame * nAAs) + i] == 1)
+                    {
+                        visitlist[i] = 1;
+                    }
+                }
+            }
+
+            //MIMICS eventListCUDA
+            for (int i = 0; i < nframes; ++i)
+            {
+                int value = 0;
+                for (int currAA = 0; currAA < nAAs; ++currAA)
+                {
+                    if (memtable[(i * nAAs) + currAA] == 1)
+                    {
+                        ++value;
+                    }
+                }
+                framesums[i] = value;
+            }
+            
+            delete[] memtable;
+
+            //Harvest mimic data
+            int eventcount = 0; int framecount = 0;
+            for (int i = 0; i < nframes; i++)
+            {
+                eventcount += framesums[i];
+                framecount += (framesums[i] > 0) ? 1 : 0;
+            }
+
+            //Print results
+            cout << "EC: " << eventcount << "\tFC: " << framecount << endl;
+            for (int i = 0; i < nAAs; i++)
+            {
+                if (visitlist[i] == 1)
+                {
+                    cout << boundAAs[i] << ",";
+                }
+            }
+            cout << endl << endl;
+
+            delete[] visitlist;
+            delete[] framesums;
+            
+        }
+        else
+        {
+            cout << "WATER NOT FOUND!" << endl;
+        }
+    }
     return 0;
 }
