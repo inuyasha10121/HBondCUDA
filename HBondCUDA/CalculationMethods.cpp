@@ -397,6 +397,13 @@ int loadTimelineLauncher(char * outGlobalTimeline, int * inTimelineVector, int *
     cudaFreeMem *= cudaMemPercentage; //Shrink the available memory based on how much memory we specified is available
     cudaFreeMem -= (sizeof(int) * (numTimeline + numLookUp)); //Reserve space for the input timeline information
     size_t memPerCalc = sizeof(char) * numAAs; //How much memory we need for each thread to do its job
+    if (memPerCalc > cudaFreeMem)
+    {
+        cerr << "ERROR: Input too large to handle (loadTimelineLauncher)" << endl;
+        cerr << "Exitting...";
+        return 1;
+    }
+
     int calculationsPossible = cudaFreeMem / memPerCalc;
 
     auto memIterReq = (int)ceil((float)numFrames / (float)calculationsPossible);  //Number of iterations needed based on memory
@@ -432,6 +439,77 @@ int loadTimelineLauncher(char * outGlobalTimeline, int * inTimelineVector, int *
 
         //Run the CUDA code
         cudaResult = loadTimelineCUDA(outGlobalTimeline, inTimelineVector, inLookupVector, currWater, numTimeline, numLookUp, numFrames, numAAs, currIter * framesPerIter, framesPerIter, blockSize, gridSize, deviceProp);
+        if (cudaResult != cudaSuccess)
+        {
+            cerr << "ERROR: Running load timeline launcher failed!" << endl;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int windowTimelineLauncher(char * ioGlobalTimeline, const int window, const int threshold, const int numFrames, const int numAAs, const float cudaMemPercentage, cudaDeviceProp &deviceProp)
+{
+    //Calculate iteratons based on memory parameters
+    size_t cudaFreeMem;
+    cudaError_t cudaResult = cudaMemGetInfo(&cudaFreeMem, NULL); //Get how much memory is available to use
+
+    if (cudaResult != cudaSuccess)
+    {
+        cerr << "cudaMemGetInfo failed!" << endl;
+        printf("\nERROR: CUDA is unable to function.  Double check your installation/device settings.");
+        printf("\nExiting...");
+        return 1;
+    }
+
+    cudaFreeMem *= cudaMemPercentage; //Shrink the available memory based on how much memory we specified is available
+
+    //TODO: This is memory inefficient, but I can't think of an equation to properly calculate this.
+    size_t memPerCalc = sizeof(char) * numAAs * 2 * window; //How much memory we need for each thread to do its job
+
+    if (memPerCalc > cudaFreeMem)
+    {
+        cerr << "ERROR: Input too large to handle (loadTimelineLauncher)" << endl;
+        cerr << "Exitting...";
+        return 1;
+    }
+
+    int calculationsPossible = cudaFreeMem / memPerCalc;
+
+    auto memIterReq = (int)ceil((float)(numFrames - window) / (float)calculationsPossible);  //Number of iterations needed based on memory
+
+    //Calculate iterations based on thread parameters
+    int blockSize = 0;
+    int minGridSize = 0;
+
+    occupancyWindowTimeline(minGridSize, blockSize, (numFrames - window)); //Use occupancy API to calculate the ideal blockSize
+
+    int gridsNeeded = (int)ceil((float)(numFrames - window) / (float)blockSize); //Calculate how many grids we need to perform the analysis
+    int gridIterReq = (int)ceil((float)gridsNeeded / (float)(deviceProp.maxGridSize[1])); //Number of iterations needed based on memory
+
+    int iterReq = max(gridIterReq, memIterReq); //Find out how many iterations we need from both of the calculations above
+    iterReq += 4;
+    int framesPerIter = (numFrames - window) / iterReq; //Calculate how many points we can handle per iteration
+
+    //Cycle thourgh until we handle all the points requested
+    for (int currIter = 0; currIter < iterReq; ++currIter)
+    {
+        int framesToProcess = framesPerIter;
+        if (currIter == (iterReq - 1)) //If we are on the last iteration, we need to make sure we don't go beyond the scope of the input
+        {
+            framesToProcess = (numFrames - window) - (currIter * framesPerIter);
+        }
+
+        //Calculate the grid parameters for this calculation
+        auto gridDiv = div(framesToProcess, blockSize);
+        auto gridSize = gridDiv.quot;
+        if (gridDiv.rem != 0)  //Round up if we have straggling frames
+        {
+            ++gridSize;
+        }
+
+        //Run the CUDA code
+        cudaResult = windowTimelineCUDA(ioGlobalTimeline, window, threshold, numFrames, numAAs, currIter * framesPerIter, framesToProcess, blockSize, gridSize, deviceProp);
         if (cudaResult != cudaSuccess)
         {
             cerr << "ERROR: Running load timeline launcher failed!" << endl;

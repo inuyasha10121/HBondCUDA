@@ -13,5 +13,7 @@ int performTimelineEventAnalysis(int & outTotalEvents, int & outFramesBound, cha
 
 int loadTimelineLauncher(char * outGlobalTimeline, int * inTimelineVector, int * inLookupVector, const int currWater, const int numTimeline, const int numLookUp, const int numFrames,
     const int numAAs, const float cudaMemPercentage, cudaDeviceProp &deviceProp);
+int windowTimelineLauncher(char * ioGlobalTimeline, const int window, const int threshold, const int numFrames, const int numAAs, const float cudaMemPercentage, cudaDeviceProp &deviceProp);
+
 
 #endif

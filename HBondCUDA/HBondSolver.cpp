@@ -82,33 +82,6 @@ int main(int argc, char **argv)
 
     cudaDeviceProp deviceProp = setupCUDA(gpuid);
 
-    //TODO: REMOVE THIS DEBUG STUFF
-    int width = 10, height = 20;
-    auto inMatrix = new char[width * height];
-    auto outMatrix = new char[width * height];
-    cout << "INPUT: " << endl;
-    for (int i = 0; i < height; ++i)
-    {
-        for (int j = 0; j < width; ++j)
-        {
-            inMatrix[(i * width) + j] = (char)((j % 26) + 65);
-            cout << inMatrix[(i * width) + j] << " ";
-        }
-        cout << endl;
-    }
-    cout << endl << "OUTPUT: " << endl;
-    memcpyrottest(inMatrix, outMatrix, width, height);
-    for (int i = 0; i < width; ++i)
-    {
-        for (int j = 0; j < height; ++j)
-        {
-            cout << outMatrix[(i * height) + j] << " ";
-        }
-        cout << endl;
-    }
-    cout << endl << "DONE!" << endl;
-    return 0;
-
     if (checkCmdLineFlag(argc, (const char**)argv, "ol"))
     {
         getCmdLineArgumentString(argc, (const char**)argv, "ol", &outpath);
@@ -570,7 +543,6 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     //Process each water
     auto gpuVisitedList = new char[numAAs]; //List of visited amino acids
     auto gpuLoadedTimeline = new char[numAAs * numFrames]; //Temporary matrix for the loaded timeline
-    auto gpuCorrectedTimeline = new char[numAAs * numFrames];  //"2D" matrix of the true hydrogen bonds
     auto gpuFrameEventInfo = new int[numFrames];  //Temporary matrix of hydrogen bond information over frames
 
     auto totaltime = 0;
@@ -588,6 +560,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         loadTimelineLauncher(gpuLoadedTimeline, gpuFlatTimeline, gpuTLLookup, currWater, flattimeline.size(), tllookup.size(), numFrames, numAAs, cudaMemPercentage, deviceProp);
 
         //DEBUG: Check if the timeline got loaded properly
+        /*
         for (int frame = 0; frame < tllookup.size() - 1; frame++)
         {
             int searchEnd = tllookup[frame + 1];
@@ -595,7 +568,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
             {
                 if (flattimeline[searchPos + 1] == currWater)
                 {
-                    if (gpuLoadedTimeline[(flattimeline[searchPos] * numFrames) + frame] != '1')
+                    if (gpuLoadedTimeline[(flattimeline[searchPos] * numFrames) + frame] != 1)
                     {
                         cout << "ERROR! Frame: " << frame << "\tAA:" << boundAAs[flattimeline[searchPos]] << "\tWater: " << boundwaters[currWater] << endl;
                         cin.get();
@@ -603,6 +576,46 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
                 }
             }
         }
+        */
+        //DEBUG: Save previous array for analysis later
+        auto oldTimeline = new char[numFrames * numAAs];
+        copy(gpuLoadedTimeline, gpuLoadedTimeline + (numFrames * numAAs), oldTimeline);
+
+        //Step 2: Perform sliding window analysis of the timeline to smooth high frequency fluctuations
+        windowTimelineLauncher(gpuLoadedTimeline, hbondwindow, windowthreshold, numFrames, numAAs, cudaMemPercentage, deviceProp);
+        //DEBUG: Check if the timeline was processed properly
+        /*
+        for (int currFrame = 0; currFrame < numFrames - hbondwindow; ++currFrame)
+        {
+            for (int currAA = 0; currAA < numAAs; ++currAA)
+            {
+                int boundFrames = 0;
+                for (int currWindow = 0; currWindow < hbondwindow; ++currWindow)
+                {
+                    if (oldTimeline[(currAA * numFrames) + currFrame + currWindow] == 1)
+                    {
+                        ++boundFrames;
+                    }
+                }
+                if (boundFrames >= windowthreshold)
+                {
+                    if (gpuLoadedTimeline[(currAA * numFrames) + currFrame] != 1)
+                    {
+                        cout << "ERROR! Frame: " << currFrame << "\tAA:" << boundAAs[currAA] << "\tWater: " << boundwaters[currWater] << endl;
+                        cin.get();
+                    }
+                }
+                else
+                {
+                    if (gpuLoadedTimeline[(currAA * numFrames) + currFrame] != 0)
+                    {
+                        cout << "ERROR! Frame: " << currFrame << "\tAA:" << boundAAs[currAA] << "\tWater: " << boundwaters[currWater] << endl;
+                        cin.get();
+                    }
+                }
+            }
+        }
+        */
         //Perform analysis kernels
         /*
         cudaResult =  timelineWindowCUDA(gpuTemp2DMatrix, gpuFlatTimeline, gpuTLLookup, hbondwindow, windowthreshold, currWater, numAAs, numFrames, flattimeline.size(), tllookup.size(), deviceProp);
@@ -679,7 +692,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     }
     delete[] gpuVisitedList;
     delete[] gpuFrameEventInfo;
-    delete[] gpuCorrectedTimeline;
+    delete[] gpuLoadedTimeline;
 
     printf("\n\nDone with analysis!\n");
 

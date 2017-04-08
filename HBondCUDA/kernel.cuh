@@ -6,7 +6,6 @@
 #define __CUDACC__
 #endif
 #include "cuda_runtime.h"
-#include "cublas.h"
 
 #include "GPUTypes.h"
 
@@ -28,9 +27,11 @@ cudaError_t timelineWindowCUDA1D(char * outGlobalMem, int * inFlatTimeline, int 
 cudaError_t eventListCUDA1D(int * outGlobalMem, char * inTimeline, const int numAAs, const int calcsToProcess, const int calcOffset, cudaDeviceProp &deviceProp);
 
 cudaError_t loadTimelineCUDA(char * outGlobalTimeline, int * inTimeline, int * inLookUp, const int currWater, const int numTimeline, const int numLookUp,
-    const int numFrames, const int numAAs, const int frameOffset, const int framesPerRun, const int blockSize, const int gridSize, cudaDeviceProp &deviceProp);
+    const int numFrames, const int numAAs, const int frameOffset, const int framesToProcess, const int blockSize, const int gridSize, cudaDeviceProp &deviceProp);
 void occupancyLoadTimeline(int & minGridSize, int & blockSize, const int calculationsRequested);
 
-void memcpyrottest(char * inMatrix, char * outMatrix, const int inWidth, const int inHeight);
+cudaError_t windowTimelineCUDA(char * ioGlobalTimeline, const int window, const int threshold, const int numFrames, const int numAAs, const int frameOffset, const int framesToProcess,
+    const int blockSize, const int gridSize, cudaDeviceProp &deviceProp);
+void occupancyWindowTimeline(int & minGridSize, int & blockSize, const int calculationsRequested);
 
 #endif
