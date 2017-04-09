@@ -36,7 +36,6 @@ int index3d(int z, int y, int x, int xmax, int ymax)
 }
 
 int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp);
-int testfunc(cudaDeviceProp deviceProp);
 
 int main(int argc, char **argv)
 {   
@@ -543,7 +542,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     //Process each water
     auto gpuVisitedList = new char[numAAs]; //List of visited amino acids
     auto gpuLoadedTimeline = new char[numAAs * numFrames]; //Temporary matrix for the loaded timeline
-    auto gpuFrameEventInfo = new int[numFrames];  //Temporary matrix of hydrogen bond information over frames
+    auto gpuFrameEventInfo = new int[numFrames - hbondwindow];  //Temporary matrix of hydrogen bond information over frames
 
     auto totaltime = 0;
 
@@ -554,7 +553,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         auto t1 = std::chrono::high_resolution_clock::now();
 
         //Prep the timeline memory for the upcoming load
-        fill(gpuLoadedTimeline, gpuLoadedTimeline + (numAAs * numFrames), '0');
+        fill(gpuLoadedTimeline, gpuLoadedTimeline + (numAAs * numFrames), 0);
 
         //Step 1: Load the timeline information into memory
         loadTimelineLauncher(gpuLoadedTimeline, gpuFlatTimeline, gpuTLLookup, currWater, flattimeline.size(), tllookup.size(), numFrames, numAAs, cudaMemPercentage, deviceProp);
@@ -616,58 +615,21 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
             }
         }
         */
-        //Perform analysis kernels
-        /*
-        cudaResult =  timelineWindowCUDA(gpuTemp2DMatrix, gpuFlatTimeline, gpuTLLookup, hbondwindow, windowthreshold, currWater, numAAs, numFrames, flattimeline.size(), tllookup.size(), deviceProp);
-        if (cudaResult != cudaSuccess) {
-            cerr << "ERROR: timelineWindowCUDA failed!" << endl;
-            cerr << "Exitting..." << endl;
-            return 1;
-        }
 
-        cudaResult = eventListCUDA(gpuFrameEventInfo, gpuTemp2DMatrix, numAAs, numFrames, deviceProp);
-        if (cudaResult != cudaSuccess) {
-        cerr << "ERROR: eventListCUDA failed!" << endl;
-        cerr << "Exitting..." << endl;
-        return 1;
-        }
-
-        
-        int errorcode = performFlatTimelineAnalysis(gpuCorrectedTimeline, flattimeline, tllookup, hbondwindow, windowthreshold, currWater, numAAs, numFrames, cudaMemPercentage, deviceProp);
-        if (errorcode == 1)
-        {
-            cout << "Something went wrong with the flat timeline analysis.  " << endl;
-            cout << "Exitting..." << endl;
-            return 1;
-        }
-        int totalEvents = 0, framesBound = 0;
-
-        errorcode = performTimelineEventAnalysis(totalEvents, framesBound, gpuCorrectedTimeline, numAAs, numFrames, cudaMemPercentage, deviceProp);
-        if (errorcode == 1)
-        {
-            cout << "Something went wrong with the timeline event analysis.  " << endl;
-            cout << "Exitting..." << endl;
-            return 1;
-        }
-
-        //TODO: This needs to be replaced with a similar method to the ones above.  
-        cudaResult = visitListCUDA(gpuVisitedList, gpuCorrectedTimeline, numAAs, numFrames, deviceProp);
-        if (cudaResult != cudaSuccess) {
-            cerr << "ERROR: visitListCUDA failed!" << endl;
-            cerr << "Exitting..." << endl;
-            return 1;
-        }
-                
-        //Harvest the data and print the results to file
-        /*
-        for (int currFrame = 0; currFrame < numFrames; ++currFrame)
+        //Step 3: Perform analysis of timeline events
+        int totalEvents = 0, boundFrames = 0;
+        timelineEventAnalysisLauncher(gpuFrameEventInfo, gpuLoadedTimeline, numFrames - hbondwindow, numAAs, cudaMemPercentage, deviceProp);
+        for (int currFrame = 0; currFrame < (numFrames - hbondwindow); ++currFrame)
         {
             totalEvents += gpuFrameEventInfo[currFrame];
-            framesBound += (gpuFrameEventInfo[currFrame] > 0) ? 1 : 0;
+            boundFrames += (gpuFrameEventInfo[currFrame] > 0) ? 1 : 0;
         }
+        //Step 4: Perform amino acid visit analysis
+        timelineVisitAnalysisLauncher(gpuVisitedList, gpuLoadedTimeline, numFrames - hbondwindow, numAAs, cudaMemPercentage, deviceProp);
         
+        //Print the results to the log .csv file
         //    fprintf(csvout, "Water ID:,Bridger?,# Events:,# Frames Bound:,Visit List:,\n");
-        fprintf(csvout, "%i,%s,%i,%i,", boundwaters[currWater], (totalEvents != framesBound) ? "true" : "false", totalEvents, framesBound);
+        fprintf(csvout, "%i,%s,%i,%i,", boundwaters[currWater], (totalEvents != boundFrames) ? "true" : "false", totalEvents, boundFrames);
         
         //TODO: This feels wrong as fuck.  
         for (int currAA = 0; currAA < numAAs; ++currAA)
@@ -679,7 +641,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         }
         fprintf(csvout, "\n");
         fflush(csvout);
-        */
+
         auto t2 = std::chrono::high_resolution_clock::now();
         auto elapsedtime = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
         totaltime += elapsedtime;
@@ -696,26 +658,5 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
 
     printf("\n\nDone with analysis!\n");
 
-    return 0;
-}
-
-int testfunc(cudaDeviceProp deviceProp)
-{
-    size_t cudaFreeMem;
-    cudaError_t cudaResult = cudaMemGetInfo(&cudaFreeMem, NULL); //Get how much memory is available to use
-
-    if (cudaResult != cudaSuccess)
-    {
-        cerr << "cudaMemGetInfo failed!" << endl;
-        printf("\nERROR: CUDA is unable to function.  Double check your installation/device settings.");
-        printf("\nExiting...");
-        return 1;
-    }
-
-    cudaFreeMem *= cudaMemPercentage; //Adjust memory based on command line
-
-    //Exit
-    cout << "DONE" << endl;
-    cin.get();
     return 0;
 }

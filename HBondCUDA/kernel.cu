@@ -154,84 +154,6 @@ __global__ void donorToWaterKernel(char *out, const GPUAtom *inDonor, const GPUA
     }
 }
 
-__global__ void timelineMapKernel2D(char * outMap, int * timeline, int * tllookup, int * boundAAs, int * boundwaters, const int window, const int threshold, const int nframes, const int nAAs, const int nwaters)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x; //Frame
-    int j = blockIdx.y * blockDim.y + threadIdx.y; //AA
-
-    if (i < (nframes * nwaters) && j < nAAs)
-    {
-        int currwater = i / nframes;
-        int currframe = i % nframes;
-
-        int boundframes = 0;
-        if (currframe < (nframes - window))
-        {
-            for (int currwindow = 0; currwindow < window; currwindow++)
-            {
-                
-                for (int currsearch = tllookup[currframe + currwindow]; currsearch < tllookup[currframe + currwindow + 1]; currsearch += 2)
-                {
-                    if ((timeline[currsearch] == boundAAs[j]) && (timeline[currsearch + 1] == boundwaters[currwater]))
-                    {
-                        boundframes++;
-                    }
-                }
-            }
-        }
-        outMap[(j * nframes) + i] = (boundframes >= threshold);
-    }
-}
-
-__global__ void timelineMapKernel1D(char * outMap, int * timeline, int * tllookup, const int window, const int threshold, const int offset, const int nframes, const int nAAs, const int nwaters)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < ((nframes - window) * nwaters * nAAs))
-    {
-        int frame = i / (nwaters * nAAs);
-        int water = (i % (nwaters * nAAs)) / nwaters;
-        int AA = (i % (nwaters * nAAs)) % nwaters;
-        int boundframes = 0;
-        for (int currwindow = 0; currwindow < window; currwindow++)
-        {
-            int searchb = tllookup[frame + currwindow + 1];
-            for (int currsearch = tllookup[frame + currwindow]; currsearch < searchb; currsearch += 2)
-            {
-                if ((timeline[currsearch] == AA) && (timeline[currsearch + 1] == (water + offset)))
-                {
-                    boundframes++;
-                }
-            }
-        }
-        __syncthreads();
-        outMap[i] = (boundframes >= threshold) ? 1 : 0 ;
-    }
-}
-
-
-__global__ void visitAndBridgerAnalysisKernel1D(char * outbridger, char * outvisitlist, int * outframesbound, const char * timelinemap, const int nframes, const int nAAs, const int nwaters)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (i < (nframes * nwaters))
-    {
-        int frame = i / (nwaters * nAAs);
-        int water = (i % (nwaters * nAAs)) / nwaters;
-
-        int boundcount = 0;
-        for (int j = 0; j < nAAs; ++j)
-        {
-            if (timelinemap[(j + nwaters * (water + nframes * frame))] == 1)
-            {
-                boundcount++;
-                outvisitlist[(water * nAAs) + j] = 1;  //Might be unsafe
-            }
-        }
-        outframesbound[(water * nframes) + frame] = boundcount;
-        outbridger[(water * nframes) + frame] = (boundcount > 1) ? 1 : 0 ;
-    }
-}
-
 cudaError_t waterFilterCuda(char *out, const GPUAtom *inWater, const float centx, const float centy, const float centz, const float maxdist, const size_t nWaters, cudaDeviceProp &deviceProp)
 {
     // the device arrays
@@ -574,519 +496,6 @@ Error:
     return cudaStatus;
 }
 
-//--------------------------------------------------------------------REFACTORED KERNELS-----------------------------------------------------------------
-__global__ void timelineWindowKernel(char * outTimeline, int * inFlatTimeline, int * inTLLookup, const int window, const int threshold, const int currWater, const int numAAs, const int numFrames)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x; //frames
-    int j = blockIdx.y * blockDim.y + threadIdx.y; //AAs
-    //Make sure we don't go beyond the scope of the analysis arrays
-    if (i < numFrames && j < numAAs)
-    {
-        int boundframes = 0;
-        for (int currWindow = 0; currWindow < window; ++currWindow)
-        {
-            int searchEnd = inTLLookup[i + currWindow + 1];
-            for (int searchPos = inTLLookup[i + currWindow]; searchPos < searchEnd; searchPos += 2)
-            {
-                if (inFlatTimeline[searchPos] == j && inFlatTimeline[searchPos + 1] == currWater)
-                {
-                    boundframes++;
-                }
-            }
-            //__syncthreads(); //Maybe this needs to go outside of the loop?
-        }
-        if (boundframes >= threshold)
-        {
-            outTimeline[(i * numAAs) + j] = 1;
-        }
-        else
-        {
-            outTimeline[(i * numAAs) + j] = 0;
-        }
-    }
-}
-
-cudaError_t timelineWindowCUDA(char * out, int * inFlatTimeline, int * inTLLookup, const int window, const int threshold, const int currWater, const int numAAs, 
-    const int numframes, const int numTimeline, const int numTLLookup, cudaDeviceProp &deviceProp)
-{
-    // define device arrays
-    int *dev_inFlatTimeline = 0;
-    int *dev_inTLLookup = 0;
-    char *dev_out = 0;
-    cudaError_t cudaStatus;
-
-    // Setup the kernel dimensions
-    int blockDim = sqrt(deviceProp.maxThreadsPerBlock);
-    auto blockSize = dim3(blockDim, blockDim);
-    //Waters are chosen for x dimension, since CUDA can handle MUCH more data along the x dimension than y.
-    auto gridSize = dim3(round((blockDim - 1 + numframes) / blockDim), round((blockDim - 1 + numAAs) / blockDim));
-
-    // Allocate GPU buffers for vectors.
-    cudaStatus = cudaMalloc((void**)&dev_out, numframes * numAAs * sizeof(char));
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_inFlatTimeline, numTimeline * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_inTLLookup, numTLLookup * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
-        goto Error;
-    }
-
-    // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_inFlatTimeline, inFlatTimeline, numTimeline * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
-        goto Error;
-    }
-
-    cudaStatus = cudaMemcpy(dev_inTLLookup, inTLLookup, numTLLookup * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
-        goto Error;
-    }
-
-    // Launch a kernel on the GPU.
-    //__global__ void timelineWindowKernel(char * outTimeline, int * inFlatTimeline, int * inTLLookup, const int window, const int threshold, const int currWater, const int numAAs, const int numFrames)
-    timelineWindowKernel << <gridSize, blockSize >> > (dev_out, dev_inFlatTimeline, dev_inTLLookup, window, threshold, currWater, numAAs, numframes);
-
-    // Check for any errors launching the kernel
-    cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess) {
-        cerr << "Timeline window kernel launch failed: " << cudaGetErrorString(cudaStatus) << endl;
-        goto Error;
-    }
-
-    // cudaDeviceSynchronize waits for the kernel to finish, and returns
-    // any errors encountered during the launch.
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaDeviceSynchronize returned error code " << cudaStatus << " after launching timeline window kernel!" << endl;
-        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus);
-        goto Error;
-    }
-
-    // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(out, dev_out, numframes * numAAs * sizeof(char), cudaMemcpyDeviceToHost);
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
-        goto Error;
-    }
-
-    // clear all our device arrays
-Error:
-    cudaFree(dev_inFlatTimeline);
-    cudaFree(dev_inTLLookup);
-    cudaFree(dev_out);
-
-    return cudaStatus;
-}
-
-__global__ void visitListKernel(char * outVisitList, char * inTimeline, const int numAAs, const int numFrames)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < numAAs)
-    {
-        outVisitList[i] = 0;
-        for (int currFrame = 0; currFrame < numFrames; ++currFrame)
-        {
-            if (inTimeline[(currFrame * numAAs) + i] == 1)
-            {
-                outVisitList[i] = 1;
-            }
-        }
-    }
-}
-
-cudaError_t visitListCUDA(char * outVisitList, char * inTimeline, const int numAAs, const int numFrames, cudaDeviceProp &deviceProp)
-{
-    // the device arrays
-    char * dev_outVisitList = 0;
-    char * dev_inTimeline = 0;
-
-    cudaError_t cudaStatus;
-
-    // use div because it's more accurrate than the rounding BS
-    auto gridDiv = div(numAAs, deviceProp.maxThreadsPerBlock);
-    auto gridY = gridDiv.quot;
-
-    // ass backwards way of rounding up (maybe use the same trick as above? It might be "faster")
-    if (gridDiv.rem != 0)
-        gridY++;
-
-    // find the block and grid size
-    auto blockSize = deviceProp.maxThreadsPerBlock;
-    int gridSize = min(16 * deviceProp.multiProcessorCount, gridY);
-
-    // Allocate GPU buffers for vectors
-    cudaStatus = cudaMalloc((void**)&dev_outVisitList, numAAs * sizeof(char));
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_inTimeline, numFrames * numAAs * sizeof(char));
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
-        goto Error;
-    }
-
-    // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_inTimeline, inTimeline, numFrames * numAAs * sizeof(char), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
-        goto Error;
-    }
-
-    // Launch a kernel on the GPU. 
-    //__global__ void visitListKernel(char * outVisitList, char * inTimeline, const int numAAs, const int numFrames)
-    visitListKernel << <gridSize, blockSize >> > (dev_outVisitList, dev_inTimeline, numAAs, numFrames);
-    // Check for any errors launching the kernel
-    cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess) {
-        cerr << "Visit and bridger analysis kernel launch failed: " << cudaGetErrorString(cudaStatus) << endl;
-        goto Error;
-    }
-
-    // cudaDeviceSynchronize waits for the kernel to finish, and returns
-    // any errors encountered during the launch.
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaDeviceSynchronize returned error code " << cudaStatus << " after launching visit and bridger analysis kernel!" << endl;
-        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus);
-        goto Error;
-    }
-    // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(outVisitList, dev_outVisitList, numAAs * sizeof(char), cudaMemcpyDeviceToHost);
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
-        goto Error;
-    }
-
-    // delete all our device arrays
-Error:
-    cudaFree(dev_outVisitList);
-    cudaFree(dev_inTimeline);
-
-    return cudaStatus;
-}
-
-__global__ void eventListKernel(int * outTempEventList, char * inTimeline, const int numAAs, const int numFrames)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < numFrames)
-    {
-        int value = 0;
-        for (int currAA = 0; currAA < numAAs; ++currAA)
-        {
-            if (inTimeline[(i * numAAs) + currAA] == 1)
-            {
-                ++value;
-            }
-        }
-        outTempEventList[i] = value;
-    }
-}
-
-cudaError_t eventListCUDA(int * outTempEventList, char * inTimeline, const int numAAs, const int numFrames, cudaDeviceProp &deviceProp)
-{
-    // the device arrays
-    int * dev_outTempEventList = 0;
-    char * dev_inTimeline = 0;
-
-    cudaError_t cudaStatus;
-
-    // use div because it's more accurrate than the rounding BS
-    auto gridDiv = div(numFrames, deviceProp.maxThreadsPerBlock);
-    auto gridY = gridDiv.quot;
-
-    // ass backwards way of rounding up (maybe use the same trick as above? It might be "faster")
-    if (gridDiv.rem != 0)
-        gridY++;
-
-    // find the block and grid size
-    auto blockSize = deviceProp.maxThreadsPerBlock;
-    int gridSize = min(16 * deviceProp.multiProcessorCount, gridY);
-
-    // Allocate GPU buffers for vectors
-    cudaStatus = cudaMalloc((void**)&dev_outTempEventList, numFrames * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_inTimeline, numFrames * numAAs * sizeof(char));
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
-        goto Error;
-    }
-
-    // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_inTimeline, inTimeline, numFrames * numAAs * sizeof(char), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
-        goto Error;
-    }
-
-    // Launch a kernel on the GPU. 
-    //__global__ void eventListKernel(int * outTempEventList, char * inTimeline, const int numAAs, const int numFrames)
-    eventListKernel << <gridSize, blockSize >> > (dev_outTempEventList, dev_inTimeline, numAAs, numFrames);
-    // Check for any errors launching the kernel
-    cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess) {
-        cerr << "Visit and bridger analysis kernel launch failed: " << cudaGetErrorString(cudaStatus) << endl;
-        goto Error;
-    }
-
-    // cudaDeviceSynchronize waits for the kernel to finish, and returns
-    // any errors encountered during the launch.
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaDeviceSynchronize returned error code " << cudaStatus << " after launching visit and bridger analysis kernel!" << endl;
-        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus);
-        goto Error;
-    }
-    // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(outTempEventList, dev_outTempEventList, numFrames * sizeof(int), cudaMemcpyDeviceToHost);
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
-        goto Error;
-    }
-
-    // delete all our device arrays
-Error:
-    cudaFree(dev_outTempEventList);
-    cudaFree(dev_inTimeline);
-
-    return cudaStatus;
-}
-
-__global__ void timelineWindowKernel1D(char * outCalcMem, int * inFlatTimeline, int * inTLLookup, const int window, const int threshold, const int currWater, 
-    const int numAAs, const int numFrames, const int calcsToProcess, const int calcOffset)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < calcsToProcess)
-    {
-        int calcPos = calcOffset + i;
-        int currFrame = calcPos / numAAs;
-        int currAA = calcPos % numAAs;
-
-        int boundFrames = 0;
-        for (int currWindow = 0; currWindow < window; ++currWindow)
-        {
-            int searchEnd = inTLLookup[currFrame + currWindow + 1];
-            for (int searchPos = inTLLookup[currFrame + window]; searchPos < searchEnd; searchPos += 2)
-            {
-                if ((inFlatTimeline[searchPos] == currAA) && (inFlatTimeline[searchPos + 1] == currWater))
-                {
-                    ++boundFrames;
-                }
-            }
-        }
-        __syncthreads();
-        if (boundFrames >= threshold)
-        {
-            outCalcMem[i] = 1;
-        }
-        else
-        {
-            outCalcMem[i] = 0;
-        }
-    }
-}
-
-cudaError_t timelineWindowCUDA1D(char * outGlobalMem, int * inFlatTimeline, int * inTLLookup, const int window, const int threshold, const int currWater, const int numAAs,
-    const int numframes, const int numTimeline, const int numTLLookup, const int calcsToProcess, const int calcOffset, cudaDeviceProp &deviceProp)
-{
-    // define device arrays
-    int *dev_inFlatTimeline = 0;
-    int *dev_inTLLookup = 0;
-    char *dev_outCalcs = 0;
-    cudaError_t cudaStatus;
-
-    // use div because it's more accurrate than the rounding BS
-    auto gridDiv = div(calcsToProcess, deviceProp.maxThreadsPerBlock);
-    auto gridY = gridDiv.quot;
-
-    // ass backwards way of rounding up (maybe use the same trick as above? It might be "faster")
-    if (gridDiv.rem != 0)
-        gridY++;
-
-    // find the block and grid size
-    auto blockSize = deviceProp.maxThreadsPerBlock;
-    int gridSize = min(16 * deviceProp.multiProcessorCount, gridY);
-
-    // Allocate GPU buffers for vectors.
-    cudaStatus = cudaMalloc((void**)&dev_outCalcs, calcsToProcess * sizeof(char));
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_inFlatTimeline, numTimeline * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_inTLLookup, numTLLookup * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
-        goto Error;
-    }
-
-    // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_inFlatTimeline, inFlatTimeline, numTimeline * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
-        goto Error;
-    }
-
-    cudaStatus = cudaMemcpy(dev_inTLLookup, inTLLookup, numTLLookup * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
-        goto Error;
-    }
-
-    // Launch a kernel on the GPU.
-    timelineWindowKernel1D << <gridSize, blockSize >> > (dev_outCalcs, dev_inFlatTimeline, dev_inTLLookup, window, threshold, currWater, numAAs, numframes, calcsToProcess, calcOffset);
-
-    // Check for any errors launching the kernel
-    cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess) {
-        cerr << "Timeline window kernel launch failed: " << cudaGetErrorString(cudaStatus) << endl;
-        goto Error;
-    }
-
-    // cudaDeviceSynchronize waits for the kernel to finish, and returns
-    // any errors encountered during the launch.
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaDeviceSynchronize returned error code " << cudaStatus << " after launching timeline window kernel!" << endl;
-        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus);
-        goto Error;
-    }
-
-    // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(outGlobalMem + calcOffset, dev_outCalcs, calcsToProcess * sizeof(char), cudaMemcpyDeviceToHost);
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
-        goto Error;
-    }
-
-    // clear all our device arrays
-Error:
-    cudaFree(dev_inFlatTimeline);
-    cudaFree(dev_inTLLookup);
-    cudaFree(dev_outCalcs);
-
-    return cudaStatus;
-}
-
-__global__ void eventListKernel1D(int * outTempEventList, char * inTimeline, const int numAAs, const int calcsToProcess, const int calcOffset)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < calcsToProcess)
-    {
-        //int calcPos = calcOffset + i;
-        int value = 0;
-        for (int currAA = 0; currAA < numAAs; ++currAA)
-        {
-            if (inTimeline[(i * numAAs) + currAA] == 1)
-            {
-                ++value;
-            }
-        }
-        outTempEventList[i] = value;
-    }
-}
-
-/*
-outTempEventList: Pointer to origin of global memory output
-inTimeline: Pointer to origin of input processed timeline (From timelineWindowCUDA1D)
-numAAs: Number of unique amino acids in the timeline
-calcsToProcess: How many frames to process this iteration
-calcOffset: Offset of how many frames have laready been processed
-deviceProp: Pointer for established CUDA device (via SetupCUDA(int gpuid))
-*/
-cudaError_t eventListCUDA1D(int * outGlobalMem, char * inTimeline, const int numAAs, const int calcsToProcess, const int calcOffset, cudaDeviceProp &deviceProp)
-{
-    // the device arrays
-    char * dev_inTimeline = 0;
-    int * dev_outTempEventList = 0;
-
-    cudaError_t cudaStatus;
-
-    // use div because it's more accurrate than the rounding BS
-    auto gridDiv = div(calcsToProcess, deviceProp.maxThreadsPerBlock);
-    auto gridY = gridDiv.quot;
-
-    // ass backwards way of rounding up (maybe use the same trick as above? It might be "faster")
-    if (gridDiv.rem != 0)
-        gridY++;
-
-    // find the block and grid size
-    auto blockSize = deviceProp.maxThreadsPerBlock;
-    int gridSize = min(16 * deviceProp.multiProcessorCount, gridY);
-
-    // Allocate GPU buffers for vectors
-    cudaStatus = cudaMalloc((void**)&dev_outTempEventList, calcsToProcess * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
-        goto Error;
-    }
-    cudaStatus = cudaMalloc((void**)&dev_inTimeline, calcsToProcess * numAAs * sizeof(char));
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
-        goto Error;
-    }
-
-    // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_inTimeline, inTimeline + (calcOffset * numAAs), calcsToProcess * numAAs * sizeof(char), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
-        goto Error;
-    }
-
-    // Launch a kernel on the GPU. 
-    //__global__ void eventListKernel(int * outTempEventList, char * inTimeline, const int numAAs, const int calcsToProcess, const int calcOffset)
-    eventListKernel1D << <gridSize, blockSize >> > (dev_outTempEventList, dev_inTimeline, numAAs, calcsToProcess, calcOffset);
-    // Check for any errors launching the kernel
-    cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess) {
-        cerr << "Visit and bridger analysis kernel launch failed: " << cudaGetErrorString(cudaStatus) << endl;
-        goto Error;
-    }
-
-    // cudaDeviceSynchronize waits for the kernel to finish, and returns
-    // any errors encountered during the launch.
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaDeviceSynchronize returned error code " << cudaStatus << " after launching visit and bridger analysis kernel!" << endl;
-        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus);
-        goto Error;
-    }
-    // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(outGlobalMem + calcOffset, dev_outTempEventList, calcsToProcess * sizeof(int), cudaMemcpyDeviceToHost);
-    if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
-        goto Error;
-    }
-    // delete all our device arrays
-Error:
-    cudaFree(dev_outTempEventList);
-    cudaFree(dev_inTimeline);
-
-    return cudaStatus;
-}
-
 //--------------------------------------------------------------------------------------------------REVISION BASED KERNELS--------------------------------------------------------------------------------------------------
 __global__ void loadTimelineKernel(char * outTimelineChunk, int * inTimeline, int * inLookUp, const int currWater, const int frameOffset, const int framesToProcess)
 {
@@ -1283,4 +692,169 @@ Error:
 void occupancyWindowTimeline(int & minGridSize, int & blockSize, const int calculationsRequested)
 {
     cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, windowTimelineKernel, 0, calculationsRequested);
+}
+
+__global__ void timelineEventAnalysisKernel(int * outEventAnalysis, char * inTimeline, const int numAAs, const int framesToProcess)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < framesToProcess)
+    {
+        int eventsum = 0;
+        for (int currAA = 0; currAA < numAAs; ++currAA)
+        {
+            eventsum += inTimeline[(currAA * framesToProcess) + i];
+        }
+        outEventAnalysis[i] = eventsum;
+    }
+}
+
+cudaError_t timelineEventAnalysisCUDA(int * outGlobalEventList, char * inGlobalTimeline, const int numFrames, const int numAAs, const int frameOffset, const int framesToProcess,
+    const int blockSize, const int gridSize, cudaDeviceProp &deviceProp)
+{
+    // the device arrays
+    int * dev_outDeviceEventList = 0;
+    char * dev_inDeviceTimeline = 0;
+
+    cudaError_t cudaStatus;
+
+    // Allocate GPU buffers for vectors
+    cudaStatus = cudaMalloc((void**)&dev_inDeviceTimeline, framesToProcess * numAAs * sizeof(char));
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMalloc failed!" << endl;
+        goto Error;
+    }
+
+
+    cudaStatus = cudaMalloc((void**)&dev_outDeviceEventList, framesToProcess * sizeof(int));
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMalloc failed!" << endl;
+        goto Error;
+    }
+
+    // Copy input vectors from host memory to GPU buffers.
+    cudaStatus = cudaMemcpy2D(dev_inDeviceTimeline, framesToProcess, inGlobalTimeline + frameOffset, numFrames, framesToProcess, numAAs, cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMemcpy failed!" << endl;
+        goto Error;
+    }
+
+    //Launch the kernel
+    //__global__ void timelineEventAnalysisKernel(int * outEventAnalysis, char * inTimeline, const int numAAs, const int framesToProcess)
+    timelineEventAnalysisKernel << <gridSize, blockSize >> > (dev_outDeviceEventList, dev_inDeviceTimeline, numAAs, framesToProcess);
+
+    // Check for any errors launching the kernel
+    cudaStatus = cudaGetLastError();
+    if (cudaStatus != cudaSuccess) {
+        cerr << "Timeline event analysis kernel launch failed: " << cudaGetErrorString(cudaStatus) << endl;
+        goto Error;
+    }
+
+    // cudaDeviceSynchronize waits for the kernel to finish, and returns
+    // any errors encountered during the launch.
+    cudaStatus = cudaDeviceSynchronize();
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaDeviceSynchronize returned error code " << cudaStatus << " after launching timeline event analysis kernel!" << endl;
+        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus);
+        goto Error;
+    }
+    // Copy output vector from GPU buffer to host memory.
+    cudaStatus = cudaMemcpy(outGlobalEventList + frameOffset, dev_outDeviceEventList, framesToProcess * sizeof(int), cudaMemcpyDeviceToHost);
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMemcpy failed!" << endl;
+        goto Error;
+    }
+    // delete all our device arrays
+Error:
+    cudaFree(dev_outDeviceEventList);
+    cudaFree(dev_inDeviceTimeline);
+
+    return cudaStatus;
+}
+
+void occupancyTimelineEventAnalysis(int & minGridSize, int & blockSize, const int calculationsRequested)
+{
+    cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, timelineEventAnalysisKernel, 0, calculationsRequested);
+}
+
+__global__ void timelineVisitAnalysisKernel(char * outVisitedAAs, char * inDeviceTimeline, const int numFrames, const int AAsToProcess)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < AAsToProcess)
+    {
+        for (int currFrame = 0; currFrame < numFrames; ++currFrame)
+        {
+            if (inDeviceTimeline[(i * numFrames) + currFrame] == 1)
+            {
+                outVisitedAAs[i] = 1;
+            }
+        }
+    }
+}
+
+cudaError_t timelineVisitAnalysisCUDA(char * outGlobalVisitList, char * inGlobalTimeline, const int numFrames, const int numAAs, const int AAOffset, const int AAsToProcess,
+    const int blockSize, const int gridSize, cudaDeviceProp &deviceProp)
+{
+    // the device arrays
+    char * dev_outDeviceAAList = 0;
+    char * dev_inDeviceTimeline = 0;
+
+    cudaError_t cudaStatus;
+
+    // Allocate GPU buffers for vectors
+    cudaStatus = cudaMalloc((void**)&dev_inDeviceTimeline, numFrames * AAsToProcess * sizeof(char));
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMalloc failed!" << endl;
+        goto Error;
+    }
+
+
+    cudaStatus = cudaMalloc((void**)&dev_outDeviceAAList, AAsToProcess * sizeof(char));
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMalloc failed!" << endl;
+        goto Error;
+    }
+
+    // Copy input vectors from host memory to GPU buffers.
+    cudaStatus = cudaMemcpy2D(dev_inDeviceTimeline, numFrames, inGlobalTimeline + (AAOffset * numFrames), numFrames, numFrames, AAsToProcess, cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMemcpy failed!" << endl;
+        goto Error;
+    }
+
+    //Launch the kernel
+    //__global__ void timelineVisitAnalysisKernel(char * outVisitedAAs, char * inDeviceTimeline, const int numFrames, const int AAsToProcess)
+    timelineVisitAnalysisKernel << <gridSize, blockSize >> > (dev_outDeviceAAList, dev_inDeviceTimeline, numFrames, AAsToProcess);
+
+    // Check for any errors launching the kernel
+    cudaStatus = cudaGetLastError();
+    if (cudaStatus != cudaSuccess) {
+        cerr << "Timeline visit analysis kernel launch failed: " << cudaGetErrorString(cudaStatus) << endl;
+        goto Error;
+    }
+
+    // cudaDeviceSynchronize waits for the kernel to finish, and returns
+    // any errors encountered during the launch.
+    cudaStatus = cudaDeviceSynchronize();
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaDeviceSynchronize returned error code " << cudaStatus << " after launching timeline visit analysis kernel!" << endl;
+        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus);
+        goto Error;
+    }
+    // Copy output vector from GPU buffer to host memory.
+    cudaStatus = cudaMemcpy(outGlobalVisitList + AAOffset, dev_outDeviceAAList, AAsToProcess * sizeof(char), cudaMemcpyDeviceToHost);
+    if (cudaStatus != cudaSuccess) {
+        cerr << "cudaMemcpy failed!" << endl;
+        goto Error;
+    }
+    // delete all our device arrays
+Error:
+    cudaFree(dev_outDeviceAAList);
+    cudaFree(dev_inDeviceTimeline);
+
+    return cudaStatus;
+}
+
+void occupancyTimelineVisitAnalysis(int & minGridSize, int & blockSize, const int calculationsRequested)
+{
+    cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, timelineVisitAnalysisKernel, 0, calculationsRequested);
 }
