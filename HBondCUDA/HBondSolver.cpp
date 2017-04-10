@@ -625,7 +625,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         */
 
         //Step 3: Perform analysis of timeline events
-        int totalEvents = 0, boundFrames = 0;
+        int totalEvents = 0, boundFrames = 0, bridgeFrames = 0;
         errorcheck = timelineEventAnalysisLauncher(gpuFrameEventInfo, gpuLoadedTimeline, numFrames - hbondwindow, numAAs, cudaMemPercentage, deviceProp);
         if (errorcheck == 1)
         {
@@ -636,6 +636,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         {
             totalEvents += gpuFrameEventInfo[currFrame];
             boundFrames += (gpuFrameEventInfo[currFrame] > 0) ? 1 : 0;
+            bridgeFrames += (gpuFrameEventInfo[currFrame] > 1) ? 1 : 0;
         }
         //Step 4: Perform amino acid visit analysis
         errorcheck = timelineVisitAnalysisLauncher(gpuVisitedList, gpuLoadedTimeline, numFrames - hbondwindow, numAAs, cudaMemPercentage, deviceProp);
@@ -645,8 +646,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         }
 
         //Print the results to the log .csv file
-        //    fprintf(csvout, "Water ID:,Bridger?,# Events:,# Frames Bound:,Visit List:,\n");
-        fprintf(csvout, "%i,%s,%i,%i,", boundwaters[currWater], (totalEvents != boundFrames) ? "true" : "false", totalEvents, boundFrames);
+        fprintf(csvout, "%i,%i,%i,%i,", boundwaters[currWater], bridgeFrames, totalEvents, boundFrames);
         
         //TODO: This feels wrong as fuck.  
         for (int currAA = 0; currAA < numAAs; ++currAA)
