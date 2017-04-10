@@ -311,7 +311,6 @@ int windowTimelineLauncher(char * ioGlobalTimeline, const int window, const int 
     int gridIterReq = (int)ceil((float)gridsNeeded / (float)(deviceProp.maxGridSize[1])); //Number of iterations needed based on memory
 
     int iterReq = max(gridIterReq, memIterReq); //Find out how many iterations we need from both of the calculations above
-    iterReq += 4;
     int framesPerIter = (numFrames - window) / iterReq; //Calculate how many points we can handle per iteration
 
     //Cycle thourgh until we handle all the points requested
@@ -383,7 +382,6 @@ int timelineEventAnalysisLauncher(int * outGlobalEventList, char * inGlobalTimel
     int gridIterReq = (int)ceil((float)gridsNeeded / (float)(deviceProp.maxGridSize[1])); //Number of iterations needed based on memory
 
     int iterReq = max(gridIterReq, memIterReq); //Find out how many iterations we need from both of the calculations above
-    iterReq += 4;
     int framesPerIter = numFrames / iterReq; //Calculate how many points we can handle per iteration
 
                                                         //Cycle thourgh until we handle all the points requested
@@ -455,7 +453,6 @@ int timelineVisitAnalysisLauncher(char * outGlobalVisitList, char * inGlobalTime
     int gridIterReq = (int)ceil((float)gridsNeeded / (float)(deviceProp.maxGridSize[1])); //Number of iterations needed based on memory
 
     int iterReq = max(gridIterReq, memIterReq); //Find out how many iterations we need from both of the calculations above
-    iterReq += 2;
     int AAsPerIter = numAAs / iterReq; //Calculate how many points we can handle per iteration
 
                                              //Cycle thourgh until we handle all the points requested

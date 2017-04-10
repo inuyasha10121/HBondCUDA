@@ -527,31 +527,32 @@ cudaError_t loadTimelineCUDA(char * outGlobalTimeline, int * inTimeline, int * i
     // Allocate GPU buffers for vectors
     cudaStatus = cudaMalloc((void**)&dev_outDeviceTimeline, framesToProcess * numAAs * sizeof(char));
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
+        cerr << "cudaMalloc failed! (dev_outDeviceTimeline)" << endl;
         goto Error;
     }
     cudaStatus = cudaMalloc((void**)&dev_inLookUp, numLookUp * sizeof(int));
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
+        cerr << "cudaMalloc failed! (dev_inLookUp)" << endl;
         goto Error;
     }
 
     cudaStatus = cudaMalloc((void**)&dev_inTimeline, numTimeline * sizeof(int));
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
+        cerr << "cudaMalloc failed! (dev_inTimeline)" << endl;
+        cout << "numTimeline: " << numTimeline;
         goto Error;
     }
 
     // Copy input vectors from host memory to GPU buffers.
     cudaStatus = cudaMemcpy(dev_inTimeline, inTimeline, numTimeline * sizeof(int), cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
+        cerr << "cudaMemcpy failed! (dev_inTimeline)" << endl;
         goto Error;
     }
 
     cudaStatus = cudaMemcpy(dev_inLookUp, inLookUp, numLookUp * sizeof(int), cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
+        cerr << "cudaMemcpy failed! (dev_inLookUp)" << endl;
         goto Error;
     }
 
@@ -570,7 +571,7 @@ cudaError_t loadTimelineCUDA(char * outGlobalTimeline, int * inTimeline, int * i
     cudaStatus = cudaDeviceSynchronize();
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaDeviceSynchronize returned error code " << cudaStatus << " after launching load timeline kernel!" << endl;
-        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus);
+        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus) << endl;
         goto Error;
     }
     // Copy output vector from GPU buffer to host memory.
@@ -578,7 +579,7 @@ cudaError_t loadTimelineCUDA(char * outGlobalTimeline, int * inTimeline, int * i
     //cudaStatus = cudaMemcpy2D(outMatrix + (offsetY * outWidth) + offsetX, outWidth, dev_tempMat, inWidth, inWidth, inHeight, cudaMemcpyDeviceToHost);
     cudaStatus = cudaMemcpy2D(outGlobalTimeline + frameOffset, numFrames, dev_outDeviceTimeline, framesToProcess, framesToProcess, numAAs, cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
+        cerr << "cudaMemcpy failed! (outGlobalTimeline)" << endl;
         goto Error;
     }
     // delete all our device arrays
@@ -635,14 +636,14 @@ cudaError_t windowTimelineCUDA(char * ioGlobalTimeline, const int window, const 
     // Allocate GPU buffers for vectors
     cudaStatus = cudaMalloc((void**)&dev_inDeviceTimeline, (framesToProcess + window) * numAAs * sizeof(char));
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
+        cerr << "cudaMalloc failed! (dev_inDeviceTimeline)" << endl;
         goto Error;
     }
 
 
     cudaStatus = cudaMalloc((void**)&dev_outDeviceTimeline, framesToProcess * numAAs * sizeof(char));
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
+        cerr << "cudaMalloc failed! (dev_outDeviceTimeline)" << endl;
         goto Error;
     }
 
@@ -650,7 +651,7 @@ cudaError_t windowTimelineCUDA(char * ioGlobalTimeline, const int window, const 
     //    cudaStatus = cudaMemcpy2D(outGlobalTimeline + frameOffset, numFrames, dev_outDeviceTimeline, framesPerIter, framesPerIter, numAAs, cudaMemcpyDeviceToHost);
     cudaStatus = cudaMemcpy2D(dev_inDeviceTimeline, framesToProcess + window, ioGlobalTimeline + frameOffset, numFrames, framesToProcess + window, numAAs, cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
+        cerr << "cudaMemcpy failed! (dev_inDeviceTimeline)" << endl;
         goto Error;
     }
 
@@ -670,7 +671,7 @@ cudaError_t windowTimelineCUDA(char * ioGlobalTimeline, const int window, const 
     cudaStatus = cudaDeviceSynchronize();
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaDeviceSynchronize returned error code " << cudaStatus << " after launching window timeline kernel!" << endl;
-        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus);
+        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus) << endl;
         goto Error;
     }
     // Copy output vector from GPU buffer to host memory.
@@ -678,7 +679,7 @@ cudaError_t windowTimelineCUDA(char * ioGlobalTimeline, const int window, const 
     //cudaStatus = cudaMemcpy2D(outMatrix + (offsetY * outWidth) + offsetX, outWidth, dev_tempMat, inWidth, inWidth, inHeight, cudaMemcpyDeviceToHost);
     cudaStatus = cudaMemcpy2D(ioGlobalTimeline + frameOffset, numFrames, dev_outDeviceTimeline, framesToProcess, framesToProcess, numAAs, cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
+        cerr << "cudaMemcpy failed! (ioGlobalTimeline)" << endl;
         goto Error;
     }
     // delete all our device arrays
@@ -720,21 +721,21 @@ cudaError_t timelineEventAnalysisCUDA(int * outGlobalEventList, char * inGlobalT
     // Allocate GPU buffers for vectors
     cudaStatus = cudaMalloc((void**)&dev_inDeviceTimeline, framesToProcess * numAAs * sizeof(char));
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
+        cerr << "cudaMalloc failed! (dev_inDeviceTimeline)" << endl;
         goto Error;
     }
 
 
     cudaStatus = cudaMalloc((void**)&dev_outDeviceEventList, framesToProcess * sizeof(int));
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
+        cerr << "cudaMalloc failed! (dev_outDeviceEventList)" << endl;
         goto Error;
     }
 
     // Copy input vectors from host memory to GPU buffers.
     cudaStatus = cudaMemcpy2D(dev_inDeviceTimeline, framesToProcess, inGlobalTimeline + frameOffset, numFrames, framesToProcess, numAAs, cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
+        cerr << "cudaMemcpy failed! (dev_inDeviceTimeline)" << endl;
         goto Error;
     }
 
@@ -754,13 +755,13 @@ cudaError_t timelineEventAnalysisCUDA(int * outGlobalEventList, char * inGlobalT
     cudaStatus = cudaDeviceSynchronize();
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaDeviceSynchronize returned error code " << cudaStatus << " after launching timeline event analysis kernel!" << endl;
-        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus);
+        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus) << endl;
         goto Error;
     }
     // Copy output vector from GPU buffer to host memory.
     cudaStatus = cudaMemcpy(outGlobalEventList + frameOffset, dev_outDeviceEventList, framesToProcess * sizeof(int), cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
+        cerr << "cudaMemcpy failed! (outGlobalEventList)" << endl;
         goto Error;
     }
     // delete all our device arrays
@@ -803,21 +804,21 @@ cudaError_t timelineVisitAnalysisCUDA(char * outGlobalVisitList, char * inGlobal
     // Allocate GPU buffers for vectors
     cudaStatus = cudaMalloc((void**)&dev_inDeviceTimeline, numFrames * AAsToProcess * sizeof(char));
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
+        cerr << "cudaMalloc failed! (dev_inDeviceTimeline)" << endl;
         goto Error;
     }
 
 
     cudaStatus = cudaMalloc((void**)&dev_outDeviceAAList, AAsToProcess * sizeof(char));
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMalloc failed!" << endl;
+        cerr << "cudaMalloc failed! (dev_outDeviceAAList)" << endl;
         goto Error;
     }
 
     // Copy input vectors from host memory to GPU buffers.
     cudaStatus = cudaMemcpy2D(dev_inDeviceTimeline, numFrames, inGlobalTimeline + (AAOffset * numFrames), numFrames, numFrames, AAsToProcess, cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
+        cerr << "cudaMemcpy failed! (dev_inDeviceTimeline)" << endl;
         goto Error;
     }
 
@@ -837,13 +838,13 @@ cudaError_t timelineVisitAnalysisCUDA(char * outGlobalVisitList, char * inGlobal
     cudaStatus = cudaDeviceSynchronize();
     if (cudaStatus != cudaSuccess) {
         cerr << "cudaDeviceSynchronize returned error code " << cudaStatus << " after launching timeline visit analysis kernel!" << endl;
-        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus);
+        cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus) << endl;
         goto Error;
     }
     // Copy output vector from GPU buffer to host memory.
     cudaStatus = cudaMemcpy(outGlobalVisitList + AAOffset, dev_outDeviceAAList, AAsToProcess * sizeof(char), cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
-        cerr << "cudaMemcpy failed!" << endl;
+        cerr << "cudaMemcpy failed! (outGlobalVisitList)" << endl;
         goto Error;
     }
     // delete all our device arrays

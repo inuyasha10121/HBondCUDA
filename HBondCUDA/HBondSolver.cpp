@@ -556,8 +556,11 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         fill(gpuLoadedTimeline, gpuLoadedTimeline + (numAAs * numFrames), 0);
 
         //Step 1: Load the timeline information into memory
-        loadTimelineLauncher(gpuLoadedTimeline, gpuFlatTimeline, gpuTLLookup, currWater, flattimeline.size(), tllookup.size(), numFrames, numAAs, cudaMemPercentage, deviceProp);
-
+        auto errorcheck = loadTimelineLauncher(gpuLoadedTimeline, gpuFlatTimeline, gpuTLLookup, currWater, flattimeline.size(), tllookup.size(), numFrames, numAAs, cudaMemPercentage, deviceProp);
+        if (errorcheck == 1)
+        {
+            return 1;
+        }
         //DEBUG: Check if the timeline got loaded properly
         /*
         for (int frame = 0; frame < tllookup.size() - 1; frame++)
@@ -577,11 +580,16 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         }
         */
         //DEBUG: Save previous array for analysis later
-        auto oldTimeline = new char[numFrames * numAAs];
-        copy(gpuLoadedTimeline, gpuLoadedTimeline + (numFrames * numAAs), oldTimeline);
+        //auto oldTimeline = new char[numFrames * numAAs];
+        //copy(gpuLoadedTimeline, gpuLoadedTimeline + (numFrames * numAAs), oldTimeline);
 
         //Step 2: Perform sliding window analysis of the timeline to smooth high frequency fluctuations
-        windowTimelineLauncher(gpuLoadedTimeline, hbondwindow, windowthreshold, numFrames, numAAs, cudaMemPercentage, deviceProp);
+        errorcheck = windowTimelineLauncher(gpuLoadedTimeline, hbondwindow, windowthreshold, numFrames, numAAs, cudaMemPercentage, deviceProp);
+        if (errorcheck == 1)
+        {
+            return 1;
+        }
+
         //DEBUG: Check if the timeline was processed properly
         /*
         for (int currFrame = 0; currFrame < numFrames - hbondwindow; ++currFrame)
@@ -618,15 +626,24 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
 
         //Step 3: Perform analysis of timeline events
         int totalEvents = 0, boundFrames = 0;
-        timelineEventAnalysisLauncher(gpuFrameEventInfo, gpuLoadedTimeline, numFrames - hbondwindow, numAAs, cudaMemPercentage, deviceProp);
+        errorcheck = timelineEventAnalysisLauncher(gpuFrameEventInfo, gpuLoadedTimeline, numFrames - hbondwindow, numAAs, cudaMemPercentage, deviceProp);
+        if (errorcheck == 1)
+        {
+            return 1;
+        }
+
         for (int currFrame = 0; currFrame < (numFrames - hbondwindow); ++currFrame)
         {
             totalEvents += gpuFrameEventInfo[currFrame];
             boundFrames += (gpuFrameEventInfo[currFrame] > 0) ? 1 : 0;
         }
         //Step 4: Perform amino acid visit analysis
-        timelineVisitAnalysisLauncher(gpuVisitedList, gpuLoadedTimeline, numFrames - hbondwindow, numAAs, cudaMemPercentage, deviceProp);
-        
+        errorcheck = timelineVisitAnalysisLauncher(gpuVisitedList, gpuLoadedTimeline, numFrames - hbondwindow, numAAs, cudaMemPercentage, deviceProp);
+        if (errorcheck == 1)
+        {
+            return 1;
+        }
+
         //Print the results to the log .csv file
         //    fprintf(csvout, "Water ID:,Bridger?,# Events:,# Frames Bound:,Visit List:,\n");
         fprintf(csvout, "%i,%s,%i,%i,", boundwaters[currWater], (totalEvents != boundFrames) ? "true" : "false", totalEvents, boundFrames);
