@@ -696,7 +696,7 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
             //Start searching
             for (int i = 0; i < numFrames; ++i)
             {
-                if (frameStates[i] != prevState && states[prevState].size > 0) //Check to see if the state has changed
+                if (frameStates[i] != prevState && states[prevState].size() > 0) //Check to see if the state has changed
                 {
                     ++numStateChanges;
                     auto internalPreviousState = frameStates[i]; //Save what state we are in, so that we can see the next change
