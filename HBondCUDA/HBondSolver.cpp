@@ -537,13 +537,12 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     cout << "Processing waters..." << endl;
 
     //Write the csv file header
-    fprintf(csvout, "Water ID:,# Bridging:,# State Changes:,# Ping-Pong,Ping-Pong?,# Events:, # Frames Bound:,Visit List:,\n");
+    fprintf(csvout, "Water ID:,# Bridging:,# States:,# State Changes:,# Ping-Pong,Ping-Pong?,# Events:, # Frames Bound:,Visit List:,\n");
 
     //Process each water
     auto gpuVisitedList = new char[numAAs]; //List of visited amino acids
     auto gpuLoadedTimeline = new char[numAAs * numFrames]; //Temporary matrix for the loaded timeline
     auto gpuFrameEventInfo = new int[numFrames];  //Temporary matrix of hydrogen bond information over frames
-    auto frameStates = new int[numFrames];
     auto totaltime = 0;
 
 
@@ -655,75 +654,14 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
 
         //Step 5: Check for ping-ponging, if a bridger
         string pingpong = "N/A";
-        int numStateChanges = 0, numPingPongs = 0;
+        int numStateChanges = 0, numPingPongs = 0, numStates = 0;
         if (bridgeFrames > 0)
         {
-            //Get the list of visited amino acids in a more compressed format
-            vector<int> aaList;
-            for (int i = 0; i < numAAs; ++i)
-            {
-                if (gpuVisitedList[i] == 1)
-                {
-                    aaList.push_back(i);
-                }
-            }
-            
-            //Get a list of unique states the water occupies during the frame
-            vector<vector<int>> states;
-            for (int i = 0; i < numFrames; ++i)
-            {
-                //Get list of currently bound amino acids
-                vector<int> currAAbound;
-                for (int j = 0; j < aaList.size(); ++j)
-                {
-                    if (gpuLoadedTimeline[(aaList[j] * numFrames) + i] == 1)
-                    {
-                        currAAbound.push_back(aaList[j]);
-                    }
-                }
-                //Find if this is a currently recorded state or not
-                auto pos = find(states.begin(), states.end(), currAAbound);
-                if (pos == states.end())
-                {
-                    states.push_back(currAAbound); //Add it to the list if not
-                }
-                frameStates[i] = distance(states.begin(), pos); //Save the state to the temporary timeline
-            }
-
-            //Go through and see if we ever catch a ping-pong state
-            pingpong = "No";
-            auto prevState = frameStates[0];
-            //Start searching
-            for (int i = 0; i < numFrames; ++i)
-            {
-                if (frameStates[i] != prevState && states[prevState].size() > 0) //Check to see if the state has changed
-                {
-                    ++numStateChanges;
-                    auto internalPreviousState = frameStates[i]; //Save what state we are in, so that we can see the next change
-                    auto foundState = frameStates[i];
-                    //Do an interior search until we see the states change again
-                    for (int j = i+1; j < numFrames; ++j)
-                    {
-                        if (frameStates[j] != internalPreviousState) //We found the next state change
-                        {
-                            foundState = frameStates[j];  //Save what state this is
-                            break;  //and leave the loop
-                        }
-                        internalPreviousState = frameStates[j];
-                    }
-                    if (prevState == foundState) //Check if we ping-ponged
-                    {
-                        pingpong = "Yes";
-                        ++numPingPongs;
-                        break;
-                    }
-                }
-                prevState = frameStates[i]; //Save what the state is for the next round of edge detection
-            }
+            pingPongChecker(numStateChanges, numStateChanges, numPingPongs, gpuLoadedTimeline, gpuVisitedList, numFrames, numAAs);
         }
 
         //Print the results to the log .csv file
-        fprintf(csvout, "%i,%i,%i,%i,%s,%i,%i,", boundwaters[currWater], bridgeFrames, numStateChanges, numPingPongs, pingpong.c_str(), totalEvents, boundFrames);
+        fprintf(csvout, "%i,%i,%i,%i,%i,%s,%i,%i,", boundwaters[currWater], bridgeFrames, numStates, numStateChanges, numPingPongs, pingpong.c_str(), totalEvents, boundFrames);
         
         //TODO: This feels wrong as fuck.  
         for (int currAA = 0; currAA < numAAs; ++currAA)
@@ -749,7 +687,6 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     delete[] gpuVisitedList;
     delete[] gpuFrameEventInfo;
     delete[] gpuLoadedTimeline;
-    delete[] frameStates;
 
     printf("\n\nDone with analysis!\n");
 

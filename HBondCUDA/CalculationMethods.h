@@ -13,4 +13,5 @@ int loadTimelineLauncher(char * outGlobalTimeline, int * inTimelineVector, int *
 int windowTimelineLauncher(char * ioGlobalTimeline, const int window, const int threshold, const int numFrames, const int numAAs, const float cudaMemPercentage, cudaDeviceProp &deviceProp);
 int timelineEventAnalysisLauncher(int * outGlobalEventList, char * inGlobalTimeline, const int numFrames, const int numAAs, const float cudaMemPercentage, cudaDeviceProp &deviceProp);
 int timelineVisitAnalysisLauncher(char * outGlobalVisitList, char * inGlobalTimeline, const int numFrames, const int numAAs, const float cudaMemPercentage, cudaDeviceProp &deviceProp);
+void pingPongChecker(int & outNumStates, int & outNumStateChanges, int & outNumPingPongs, char * inTimeline, char * inVisitList, const int numFrames, const int numAAs);
 #endif

@@ -482,3 +482,80 @@ int timelineVisitAnalysisLauncher(char * outGlobalVisitList, char * inGlobalTime
     }
     return 0;
 }
+
+void pingPongChecker(int & outNumStates, int & outNumStateChanges, int & outNumPingPongs, char * inTimeline, char * inVisitList, const int numFrames, const int numAAs)
+{
+    //Setup some initial storage stuff
+    auto frameStates = new ptrdiff_t[numFrames];
+    int numStateChanges = 0, numPingPongs = 0;
+    //Get the list of visited amino acids in a more compressed format
+    vector<int> aaList;
+    for (int i = 0; i < numAAs; ++i)
+    {
+        if (inVisitList[i] == 1)
+        {
+            aaList.push_back(i);
+        }
+    }
+
+    //Get a list of unique states the water occupies during the frame
+    vector<vector<int>> states;
+    vector<int> unbound;
+    states.push_back(unbound); //Set unbound to the default (0) state.
+    for (int i = 0; i < numFrames; ++i)
+    {
+        //Get list of currently bound amino acids
+        vector<int> currAAbound;
+        for (int j = 0; j < aaList.size(); ++j)
+        {
+            if (inTimeline[(aaList[j] * numFrames) + i] == 1)
+            {
+                currAAbound.push_back(aaList[j]);
+            }
+        }
+        //Find if this is a currently recorded state or not
+        auto pos = find(states.begin(), states.end(), currAAbound);
+        if (pos == states.end())
+        {
+            frameStates[i] = states.size();
+            states.push_back(currAAbound); //Add it to the list if not
+        }
+        else
+        {
+            frameStates[i] = distance(states.begin(), pos);
+        }
+        int temp = distance(states.begin(), pos);
+         //Save the state to the temporary timeline
+    }
+    outNumStates = states.size();
+    //Go through and see if we ever catch a ping-pong state
+    auto prevState = frameStates[0];
+    //Start searching
+    for (int i = 0; i < numFrames - 1; ++i)
+    {
+        if (frameStates[i] != prevState && prevState != 0) //Check to see if the state has changed (we don't care about free -> bound transition
+        {
+            ++numStateChanges;
+            auto internalPreviousState = frameStates[i]; //Save what state we are in, so that we can see the next change
+            auto foundState = frameStates[i];
+            //Do an interior search until we see the states change again
+            for (int j = i + 1; j < numFrames; ++j)
+            {
+                if (frameStates[j] != internalPreviousState) //We found the next state change
+                {
+                    foundState = frameStates[j];  //Save what state this is
+                    break;  //and leave the loop
+                }
+                internalPreviousState = frameStates[j];
+            }
+            if (prevState == foundState) //Check if we ping-ponged
+            {
+                ++numPingPongs;
+            }
+        }
+        prevState = frameStates[i]; //Save what the state is for the next round of edge detection
+    }
+    outNumStateChanges = numStateChanges;
+    outNumPingPongs = numPingPongs;
+    delete[] frameStates;
+}
