@@ -23,6 +23,7 @@ char * hbondtablepath = "D:\\CALB\\HBondTableRev2.csv";
 char * trajpath = "D:\\CALB\\noPBC_nvt.trr";
 char * outpath = "D:\\CALB\\hbondlog.txt";
 char * csvpath = "D:\\CALB\\analysis.csv";
+char * bridgerpath = "";
 int dt = 1;
 int hbondwindow = 5; //MUST BE ODD
 int windowthreshold = 4; //Inclusive
@@ -50,6 +51,7 @@ int main(int argc, char **argv)
         cout << "      -trj : Trajectory Path (Required if not jumping directly to analysis)" << endl;
         cout << "      -ol : Outpath for Hydrogen Bond Timeline File (Required ALWAYS)" << endl << endl;
         cout << "      -oa : Outpath for Analysis CSV file (Required ALWAYS)" << endl;
+        cout << "      -ob : Outpath for bridger analysis log (Required ALWAYS)" << endl;
         cout << "      -dt=<ARG> : Frame skip parameter (Optional, Default 1)" << endl;
         cout << "      -window=<ARG> : Window frame size for bond analysis (Optional, Default 5)" << endl;
         cout << "      -wint=<ARG> : Window threshold for bond analysis (Optional, Default 4)" << endl;
@@ -100,6 +102,18 @@ int main(int argc, char **argv)
     else
     {
         cout << "An output analysis csv (-oa) file MUST be specified." << endl;
+        cout << "Run \"" << argv[0] << " -help\" for more details." << endl;
+
+        return 1;
+    }
+
+    if (checkCmdLineFlag(argc, (const char**)argv, "ob"))
+    {
+        getCmdLineArgumentString(argc, (const char**)argv, "ob", &bridgerpath);
+    }
+    else
+    {
+        cout << "An output bridger log (-ob) file MUST be specified." << endl;
         cout << "Run \"" << argv[0] << " -help\" for more details." << endl;
 
         return 1;
@@ -500,6 +514,15 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         return 1;
     }
 
+    FILE *bridgeout;
+    char * blpath = &bridgerpath[0];
+    bridgeout = fopen(blpath, "w");
+    if (bridgeout == NULL)
+    {
+        printf("Error: Bridger log file could not be opened for writing.");
+        return 1;
+    }
+
     //Water ID:, Bridger?:, Bulk?:, #AAs:, # Events:
     printf("Performing analysis.  This may take a while...\n");
 
@@ -639,12 +662,28 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
             return 1;
         }
 
+        fprintf(bridgeout, "Water: %i\n", boundwaters[currWater]); //Make a log entry in the bridger file
         for (int currFrame = 0; currFrame < (numFrames); ++currFrame)
         {
             totalEvents += gpuFrameEventInfo[currFrame];
             boundFrames += (gpuFrameEventInfo[currFrame] > 0) ? 1 : 0;
             bridgeFrames += (gpuFrameEventInfo[currFrame] > 1) ? 1 : 0;
+            if (gpuFrameEventInfo[currFrame] > 1) //Check if bridging is occuring this frame
+            {
+                fprintf(bridgeout, " ,Frame %i:,", currFrame);
+                //Go through amino acids, see which ones are bound, and record
+                for (int currAA = 0; currAA < numAAs; ++currAA)
+                {
+                    if (gpuLoadedTimeline[(currAA * numFrames) + currFrame] == 1)
+                    {
+                        fprintf(bridgeout, "%i,", boundAAs[currAA]);
+                    }
+                }
+                fprintf(bridgeout, "\n");
+                fflush(bridgeout);
+            }
         }
+
         //Step 4: Perform amino acid visit analysis
         errorcheck = timelineVisitAnalysisLauncher(gpuVisitedList, gpuLoadedTimeline, numFrames, numAAs, cudaMemPercentage, deviceProp);
         if (errorcheck == 1)
@@ -687,6 +726,9 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
     delete[] gpuVisitedList;
     delete[] gpuFrameEventInfo;
     delete[] gpuLoadedTimeline;
+
+    fclose(csvout);
+    fclose(bridgeout);
 
     printf("\n\nDone with analysis!\n");
 
