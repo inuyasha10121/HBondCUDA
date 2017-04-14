@@ -696,7 +696,15 @@ int performTimelineAnalysis(char * logpath, cudaDeviceProp deviceProp)
         int numStateChanges = 0, numPingPongs = 0, numStates = 0;
         if (bridgeFrames > 0)
         {
-            pingPongChecker(numStateChanges, numStateChanges, numPingPongs, gpuLoadedTimeline, gpuVisitedList, numFrames, numAAs);
+            pingPongChecker(numStates, numStateChanges, numPingPongs, gpuLoadedTimeline, gpuVisitedList, numFrames, numAAs);
+            if (numPingPongs > 0)
+            {
+                pingpong = "YES";
+            }
+            else
+            {
+                pingpong = "NO";
+            }
         }
 
         //Print the results to the log .csv file
