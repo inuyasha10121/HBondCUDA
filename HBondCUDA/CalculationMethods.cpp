@@ -6,6 +6,7 @@
 #include <vector>
 #include <cmath>
 #include <float.h>
+#include <algorithm>
 
 #include "CalculationMethods.h"
 #include "GPUTypes.h"

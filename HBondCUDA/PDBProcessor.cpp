@@ -328,25 +328,25 @@ void PDBProcessor::getProtAndWaterFromAtom(vector<Atom> & atoms, vector<vector<s
                 {
                     if (hbondtable[j][0] == atoms[i].resName && hbondtable[j][1] == atoms[i].name)
                     {
-                        if (hbondtable[j][2] == "D")
+                        if (hbondtable[j][2].find("D") != string::npos)
                         {
                             atoms[i].hbondType = 'D';
                             atoms[i].hbondListPos = proteinDonor.size();
                             proteinDonor.push_back(atoms[i]);
                         }
-                        else if (hbondtable[j][2] == "A")
+                        else if (hbondtable[j][2].find("A") != string::npos)
                         {
                             atoms[i].hbondType = 'A';
                             atoms[i].hbondListPos = proteinAcceptor.size();
                             proteinAcceptor.push_back(atoms[i]);
                         }
-                        else if (hbondtable[j][2] == "L")
+                        else if (hbondtable[j][2].find("L") != string::npos)
                         {
                             atoms[i].hbondType = 'L';
                             atoms[i].hbondListPos = proteinLinker.size();
                             proteinLinker.push_back(atoms[i]);
                         }
-                        else if (hbondtable[j][2] == "E")
+                        else if (hbondtable[j][2].find("E") != string::npos)
                         {
                             
                         }

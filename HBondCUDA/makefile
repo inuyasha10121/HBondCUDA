@@ -262,8 +262,6 @@ HBondSolver.o:HBondSolver.cpp
 
 HBondCUDA: kernel.o trr2xtc.o xdrfile.o xdrfile_c_test.o xdrfile_trr.o xdrfile_xtc.o CalculationMethods.o CSVReader.o PDBProcessor.o TrajectoryProcessor.o HBondSolver.o
 	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
-	$(EXEC) mkdir -p ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)
-	$(EXEC) cp $@ ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)
 
 run: build
 	$(EXEC) ./HBondCUDA
