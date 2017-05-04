@@ -49,6 +49,7 @@ public:
         vector<Atom> & proteinLinker);
     void getProtAndWaterFromAtom(vector<Atom> & atoms, vector<vector<string>> & hbondtable, vector<Atom> & water, vector<Atom> & proteinDonor, 
         vector<Atom> & proteinAcceptor, vector<Atom> & proteinLinker);
+	void getGPUHeavyProtWaterFromAtom(vector<Atom> & atoms, vector<GPUAtom> & water, vector<GPUAtom> & protein);
 };
 
 #endif

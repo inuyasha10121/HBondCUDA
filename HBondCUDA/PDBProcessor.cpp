@@ -217,6 +217,7 @@ void PDBProcessor::getProtAndWaterFromPDB(vector<vector<string>> hbondtable, vec
                 curAtom.tempFactor = stof(line.substr(60, 6));
                 curAtom.charge = trim(charge);
 
+				//TODO: This is broken.  Fix it with the toggle function as above
                 if (curAtom.resSeq % 10000 == 9999)
                 {
                     residoffset += 10000;
@@ -360,4 +361,33 @@ void PDBProcessor::getProtAndWaterFromAtom(vector<Atom> & atoms, vector<vector<s
             }
         }
     }
+}
+
+
+void PDBProcessor::getGPUHeavyProtWaterFromAtom(vector<Atom> & atoms, vector<GPUAtom> & water, vector<GPUAtom> & protein)
+{
+	for (int i = 0; i < atoms.size(); i++)
+	{
+		if (atoms[i].element.compare("H") != 0)  //Ignore hydrogens
+		{
+			GPUAtom temp;
+			temp.resid = atoms[i].resSeq;
+			temp.x = atoms[i].x;
+			temp.y = atoms[i].y;
+			temp.z = atoms[i].z;
+
+			if (atoms[i].resName.compare("SOL") == 0) //Found a water
+			{
+				atoms[i].hbondType = 'W';
+				atoms[i].hbondListPos = water.size();
+				water.push_back(temp);
+			}
+			else //Found protein
+			{
+				atoms[i].hbondType = 'P';
+				atoms[i].hbondListPos = protein.size();
+				protein.push_back(temp);
+			}
+		}
+	}
 }

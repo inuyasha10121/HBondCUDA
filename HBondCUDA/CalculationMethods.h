@@ -1,5 +1,5 @@
-#ifndef CALCULAIONMETHODS_H
-#define CALCULAIONMETHODS_H
+#ifndef CALCULATIONMETHODS_H
+#define CALCULATIONMETHODS_H
 
 #include <vector>
 #include "kernel.cuh"
@@ -14,4 +14,7 @@ int windowTimelineLauncher(char * ioGlobalTimeline, const int window, const int 
 int timelineEventAnalysisLauncher(int * outGlobalEventList, char * inGlobalTimeline, const int numFrames, const int numAAs, const float cudaMemPercentage, cudaDeviceProp &deviceProp);
 int timelineVisitAnalysisLauncher(char * outGlobalVisitList, char * inGlobalTimeline, const int numFrames, const int numAAs, const float cudaMemPercentage, cudaDeviceProp &deviceProp);
 void pingPongChecker(int & outNumStates, int & outNumStateChanges, int & outNumPingPongs, char * inTimeline, char * inVisitList, const int numFrames, const int numAAs);
+
+int neighborAnalysisLauncher(int * outNearID, float * outNearDist, GPUAtom * inWater, GPUAtom * inProtein, const int numProtein, const int numWater, const float cudaMemPercentage, cudaDeviceProp &deviceProp);
+int velBasedAnalysis(char * pdbFile, char * trjFile, char * vellog, char * neighborlog, float veldistcutoff, int dt, float cudaMemPercentage, cudaDeviceProp deviceProp);
 #endif

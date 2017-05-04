@@ -32,4 +32,9 @@ void occupancyTimelineEventAnalysis(int & minGridSize, int & blockSize, const in
 cudaError_t timelineVisitAnalysisCUDA(char * outGlobalVisitList, char * inGlobalTimeline, const int numFrames, const int numAAs, const int AAOffset, const int AAsToProcess,
     const int blockSize, const int gridSize, cudaDeviceProp &deviceProp);
 void occupancyTimelineVisitAnalysis(int & minGridSize, int & blockSize, const int calculationsRequested);
+
+cudaError_t neighborAnalysisCUDA(int * outNearID, float * outNearDist, GPUAtom * inWater, GPUAtom * inProtein, const int numProtein, const int waterToProcess,
+	const int waterOffset, const int blockSize, const int gridSize, cudaDeviceProp &deviceProp);
+void occupancyNeighborAnalysis(int & minGridSize, int & blockSize, const int calculationsRequested);
+
 #endif

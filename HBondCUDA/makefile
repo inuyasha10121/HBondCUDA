@@ -257,17 +257,20 @@ PDBProcessor.o:PDBProcessor.cpp
 TrajectoryProcessor.o:TrajectoryProcessor.cpp
 	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
 
+AnalysisMethod.o:AnalysisMethod.cpp
+	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
+
 HBondSolver.o:HBondSolver.cpp
 	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
 
-HBondCUDA: kernel.o trr2xtc.o xdrfile.o xdrfile_c_test.o xdrfile_trr.o xdrfile_xtc.o CalculationMethods.o CSVReader.o PDBProcessor.o TrajectoryProcessor.o HBondSolver.o
+HBondCUDA: kernel.o trr2xtc.o xdrfile.o xdrfile_c_test.o xdrfile_trr.o xdrfile_xtc.o CalculationMethods.o CSVReader.o PDBProcessor.o TrajectoryProcessor.o AnalysisMethods.o HBondSolver.o
 	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
 
 run: build
 	$(EXEC) ./HBondCUDA
 
 	clean:
-	rm -f HBondCUDA kernel.o trr2xtc.o xdrfile.o xdrfile_c_test.o xdrfile_trr.o xdrfile_xtc.o CalculationMethods.o CSVReader.o PDBProcessor.o TrajectoryProcessor.o HBondSolver.o
+	rm -f HBondCUDA kernel.o trr2xtc.o xdrfile.o xdrfile_c_test.o xdrfile_trr.o xdrfile_xtc.o CalculationMethods.o CSVReader.o PDBProcessor.o TrajectoryProcessor.o AnalysisMethods.o HBondSolver.o
 	rm -rf ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)/HBondCUDA
 
 clobber: clean

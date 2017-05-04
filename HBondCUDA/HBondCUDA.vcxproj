@@ -237,6 +237,7 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
     <CudaCompile Include="kernel.cu" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="AnalysisMethods.cpp" />
     <ClCompile Include="CalculationMethods.cpp" />
     <ClCompile Include="CSVReader.cpp" />
     <ClCompile Include="HBondSolver.cpp" />
@@ -249,6 +250,7 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
     <ClCompile Include="xdrfile_xtc.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AnalysisMethods.h" />
     <ClInclude Include="CalculationMethods.h" />
     <ClInclude Include="CSVReader.h" />
     <ClInclude Include="GPUTypes.h" />

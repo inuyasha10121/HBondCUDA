@@ -7,10 +7,13 @@
 #include <cmath>
 #include <float.h>
 #include <algorithm>
+#include <chrono>
 
 #include "CalculationMethods.h"
 #include "GPUTypes.h"
 #include "PDBProcessor.h"
+#include "xdrfile_trr.h"
+#include "xdrfile_xtc.h"
 
 using namespace std;
 
@@ -559,4 +562,81 @@ void pingPongChecker(int & outNumStates, int & outNumStateChanges, int & outNumP
     outNumStateChanges = numStateChanges;
     outNumPingPongs = numPingPongs;
     delete[] frameStates;
+}
+
+int neighborAnalysisLauncher(int * outNearID, float * outNearDist, GPUAtom * inWater, GPUAtom * inProtein, const int numProtein, const int numWater, const float cudaMemPercentage, cudaDeviceProp &deviceProp)
+{
+	//Calculate iteratons based on memory parameters
+	size_t cudaFreeMem;
+	cudaError_t cudaResult = cudaMemGetInfo(&cudaFreeMem, NULL); //Get how much memory is available to use
+
+	if (cudaResult != cudaSuccess)
+	{
+		cerr << "cudaMemGetInfo failed!" << endl;
+		printf("\nERROR: CUDA is unable to function.  Double check your installation/device settings.");
+		printf("\nExiting...");
+		return 1;
+	}
+
+	cudaFreeMem *= cudaMemPercentage; //Shrink the available memory based on how much memory we specified is available
+	cudaFreeMem -= (sizeof(GPUAtom) * (numWater + numProtein));
+
+	//TODO: This is memory inefficient, but I can't think of an equation to properly calculate this.
+	size_t memPerCalc = sizeof(float) + sizeof(int); //How much memory we need for each thread to do its job
+
+	if (memPerCalc > cudaFreeMem)
+	{
+		cerr << "ERROR: Input too large to handle (neighborAnalysisLauncher)" << endl;
+		cerr << "Exitting...";
+		return 1;
+	}
+
+	int calculationsPossible = cudaFreeMem / memPerCalc;
+
+	auto memIterReq = (int)ceil((float)numWater / (float)calculationsPossible);  //Number of iterations needed based on memory
+
+	//Calculate iterations based on thread parameters
+	int blockSize = 0;
+	int minGridSize = 0;
+
+	occupancyNeighborAnalysis(minGridSize, blockSize, numWater); //Use occupancy API to calculate the ideal blockSize
+
+	int gridsNeeded = (int)ceil((float)numWater / (float)blockSize); //Calculate how many grids we need to perform the analysis
+	int gridIterReq = (int)ceil((float)gridsNeeded / (float)(deviceProp.maxGridSize[1])); //Number of iterations needed based on memory
+
+	int iterReq = max(gridIterReq, memIterReq); //Find out how many iterations we need from both of the calculations above
+	int WatersPerIter = numWater / iterReq; //Calculate how many points we can handle per iteration
+
+	//Cycle thourgh until we handle all the points requested
+	for (int currIter = 0; currIter < iterReq; ++currIter)
+	{
+		int WatersToProcess = WatersPerIter;
+		if (currIter == (iterReq - 1)) //If we are on the last iteration, we need to make sure we don't go beyond the scope of the input
+		{
+			WatersToProcess = numWater - (currIter * WatersPerIter);
+		}
+
+		//Calculate the grid parameters for this calculation
+		auto gridDiv = div(WatersToProcess, blockSize);
+		auto gridSize = gridDiv.quot;
+		if (gridDiv.rem != 0)  //Round up if we have straggling frames
+		{
+			++gridSize;
+		}
+
+		//Run the CUDA code
+		cudaResult = neighborAnalysisCUDA(outNearID, outNearDist, inWater, inProtein, numProtein, WatersToProcess, currIter * WatersPerIter, blockSize, gridSize, deviceProp);
+		if (cudaResult != cudaSuccess)
+		{
+			cerr << "ERROR: Running neighbor analysis launcher failed!" << endl;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+
+
+int velBasedAnalysis(char * pdbFile, char * trjFile, char * vellog, char * neighborlog, float veldistcutoff, int dt, float cudaMemPercentage, cudaDeviceProp deviceProp)
+{
 }

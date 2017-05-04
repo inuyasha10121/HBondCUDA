@@ -859,3 +859,125 @@ void occupancyTimelineVisitAnalysis(int & minGridSize, int & blockSize, const in
 {
     cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, timelineVisitAnalysisKernel, 0, calculationsRequested);
 }
+
+//--------------------------------------------------------------------------------------------------VELOCITY KERNELS--------------------------------------------------------------------------------------------------
+__global__ void neighborAnalysisKernel(int * outNearID, float * outNearDist, GPUAtom * inWater, GPUAtom * inProtein, const int numProtein, const int watersToProcess, const int waterOffset)
+{
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	if (i < watersToProcess)
+	{
+		int currwater = i + waterOffset;
+		float mindist = FLT_MAX;
+		int nearres = -1;
+		for (int j = 0; j < numProtein; ++j)
+		{
+			float distx = (inWater[currwater].x - inProtein[j].x);
+			float disty = (inWater[currwater].y - inProtein[j].y);
+			float distz = (inWater[currwater].z - inProtein[j].z);
+			float dist = sqrtf((distx * distx) + (disty * disty) + (distz * distz));
+			if (dist < mindist)
+			{
+				mindist = dist;
+				nearres = j;
+			}
+		}
+		outNearID[i] = nearres;
+		outNearDist[i] = mindist;
+	}
+}
+
+cudaError_t neighborAnalysisCUDA(int * outNearID, float * outNearDist, GPUAtom * inWater, GPUAtom * inProtein, const int numProtein, const int waterToProcess, const int waterOffset, const int blockSize, const int gridSize, cudaDeviceProp &deviceProp)
+{
+	// the device arrays
+	GPUAtom * dev_inWater = 0;
+	GPUAtom * dev_inProtein = 0;
+	int * dev_outNearID = 0;
+	float * dev_outNearDist = 0;
+
+	cudaError_t cudaStatus;
+
+	// Allocate GPU buffers for vectors
+	cudaStatus = cudaMalloc((void**)&dev_inWater, waterToProcess * sizeof(GPUAtom));
+	if (cudaStatus != cudaSuccess) {
+		cerr << "cudaMalloc failed! (dev_inDeviceTimeline)" << endl;
+		goto Error;
+	}
+
+	cudaStatus = cudaMalloc((void**)&dev_inProtein, numProtein * sizeof(GPUAtom));
+	if (cudaStatus != cudaSuccess) {
+		cerr << "cudaMalloc failed! (dev_outDeviceAAList)" << endl;
+		goto Error;
+	}
+
+	cudaStatus = cudaMalloc((void**)&dev_outNearDist, waterToProcess * sizeof(float));
+	if (cudaStatus != cudaSuccess) {
+		cerr << "cudaMalloc failed! (dev_outDeviceAAList)" << endl;
+		goto Error;
+	}
+
+	cudaStatus = cudaMalloc((void**)&dev_outNearID, waterToProcess * sizeof(int));
+	if (cudaStatus != cudaSuccess) {
+		cerr << "cudaMalloc failed! (dev_outDeviceAAList)" << endl;
+		goto Error;
+	}
+
+
+	// Copy input vectors from host memory to GPU buffers.
+	cudaStatus = cudaMemcpy(dev_inWater, inWater + waterOffset, waterToProcess * sizeof(GPUAtom), cudaMemcpyHostToDevice);
+	if (cudaStatus != cudaSuccess) {
+		cerr << "cudaMemcpy failed! (dev_inDeviceTimeline)" << endl;
+		goto Error;
+	}
+
+	cudaStatus = cudaMemcpy(dev_inProtein, inProtein, numProtein * sizeof(GPUAtom), cudaMemcpyHostToDevice);
+	if (cudaStatus != cudaSuccess) {
+		cerr << "cudaMemcpy failed! (outGlobalVisitList)" << endl;
+		goto Error;
+	}
+
+
+	//Launch the kernel
+	//__global__ void neighborAnalysisKernel(int * outNearID, float * outNearDist, GPUAtom * inWater, GPUAtom * inProtein, const int numProtein, const int watersToProcess, const int waterOffset)
+	neighborAnalysisKernel << <gridSize, blockSize >> > (dev_outNearID, dev_outNearDist, dev_inWater, dev_inProtein, numProtein, waterToProcess, waterOffset);
+
+	// Check for any errors launching the kernel
+	cudaStatus = cudaGetLastError();
+	if (cudaStatus != cudaSuccess) {
+		cerr << "Timeline visit analysis kernel launch failed: " << cudaGetErrorString(cudaStatus) << endl;
+		goto Error;
+	}
+
+	// cudaDeviceSynchronize waits for the kernel to finish, and returns
+	// any errors encountered during the launch.
+	cudaStatus = cudaDeviceSynchronize();
+	if (cudaStatus != cudaSuccess) {
+		cerr << "cudaDeviceSynchronize returned error code " << cudaStatus << " after launching timeline visit analysis kernel!" << endl;
+		cout << "Cuda failure " << __FILE__ << ":" << __LINE__ << " '" << cudaGetErrorString(cudaStatus) << endl;
+		goto Error;
+	}
+	// Copy output vector from GPU buffer to host memory.
+	cudaStatus = cudaMemcpy(outNearDist + waterOffset, dev_outNearDist, waterToProcess * sizeof(float), cudaMemcpyDeviceToHost);
+	if (cudaStatus != cudaSuccess) {
+		cerr << "cudaMemcpy failed! (outGlobalVisitList)" << endl;
+		goto Error;
+	}
+
+	cudaStatus = cudaMemcpy(outNearID + waterOffset, dev_outNearID, waterToProcess * sizeof(int), cudaMemcpyDeviceToHost);
+	if (cudaStatus != cudaSuccess) {
+		cerr << "cudaMemcpy failed! (outGlobalVisitList)" << endl;
+		goto Error;
+	}
+	// delete all our device arrays
+Error:
+	cudaFree(dev_inProtein);
+	cudaFree(dev_inWater);
+	cudaFree(dev_outNearDist);
+	cudaFree(dev_outNearID);
+
+	return cudaStatus;
+}
+
+void occupancyNeighborAnalysis(int & minGridSize, int & blockSize, const int calculationsRequested)
+{
+	cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, neighborAnalysisKernel, 0, calculationsRequested);
+}
