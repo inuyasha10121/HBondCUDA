@@ -561,6 +561,7 @@ int velocityAnalysis(char * pdbpath, char * trjpath, char * velocitycsv, char * 
 	xdr_coords = new rvec[xdr_natoms];
 
 	//Setup loggers
+	/*
 	FILE *vellogger;
 	vellogger = fopen(velocitycsv, "w");
 	if (vellogger == NULL)
@@ -577,7 +578,10 @@ int velocityAnalysis(char * pdbpath, char * trjpath, char * velocitycsv, char * 
 		return 1;
 	}
 
-	//Load the first frame of coordinates in
+	//Load the first frame of coordinates in, and setup the headers for the output files
+	fprintf(vellogger, "Time:,");
+	fprintf(neilogger, "Time:,");
+	*/
 	if (is_xtc)
 	{
 		result_xdr = read_xtc(xd_read, xdr_natoms, &xdr_step, &xdr_time, xdr_box, xdr_coords, &xtc_prec);
@@ -596,15 +600,21 @@ int velocityAnalysis(char * pdbpath, char * trjpath, char * velocitycsv, char * 
 			protein[atoms[i].hbondListPos].z = xdr_coords[i][2] * 10.0f;
 			break;
 		case 'W':
+			//fprintf(vellogger, "%i,", waters[atoms[i].hbondListPos].resid);
+			//fprintf(neilogger, "%i,", waters[atoms[i].hbondListPos].resid);
 			waters[atoms[i].hbondListPos].x = xdr_coords[i][0] * 10.0f;
 			waters[atoms[i].hbondListPos].y = xdr_coords[i][1] * 10.0f;
 			waters[atoms[i].hbondListPos].z = xdr_coords[i][2] * 10.0f;
+			break;
+		case 'H': //Ignore hydrogens
 			break;
 		default:
 			printf("ERROR: Internal flag lookup table is mangled somehow! (Found: %c)\n", atoms[i].hbondType);
 			return 1;
 		}
 	}
+	//fprintf(vellogger, "\n");
+	//fprintf(neilogger, "\n");
 
 	//Keep reading the trajectory file until we hit the end
 	int currentframe = 1;
@@ -615,7 +625,9 @@ int velocityAnalysis(char * pdbpath, char * trjpath, char * velocitycsv, char * 
 	auto mindist = new float[numwaters];
 	auto nearres = new int[numwaters];
 	auto avgvel = new float[numprotein];
+	fill(avgvel, avgvel + numprotein, 0);
 	auto avginstances = new int[numprotein];
+	fill(avginstances, avginstances + numprotein, 0);
 	auto prevsimtime = xdr_time;
 
 	printf("Processing frame: %i", currentframe);
@@ -633,6 +645,10 @@ int velocityAnalysis(char * pdbpath, char * trjpath, char * velocitycsv, char * 
 
 		if (currentframe % dt == 0)
 		{
+			if (xdr_time == prevsimtime)  //Get around the potential issue that the last frame has the same time as the last-1 frame
+				break;
+			//fprintf(vellogger, "%f,", xdr_time);
+			//fprintf(neilogger, "%f,", xdr_time);
 			//Do neighbor analysis
 			neighborAnalysisLauncher(nearres, mindist, gpuwater, gpuprotein, numprotein, numwaters, gpumem, deviceProp);
 			//Load the new coordinate information into the lists, while calculating velocities
@@ -647,11 +663,14 @@ int velocityAnalysis(char * pdbpath, char * trjpath, char * velocitycsv, char * 
 					break;
 				case 'W':
 				{
+					//TODO: Maybe do this on GPU?  It might be faster
 					int currwater = atoms[i].hbondListPos;
 					float newx = xdr_coords[i][0] * 10.0f;
 					float newy = xdr_coords[i][1] * 10.0f;
 					float newz = xdr_coords[i][2] * 10.0f;
 
+					//fprintf(vellogger, "%f,", velocity);
+					//fprintf(neilogger, "%i,", protein[nearres[currwater]].resid);
 					//If the water is close to a residue atom, calculate it's velocity and save it for averaging
 					if (mindist[currwater] < cutoffdist)
 					{
@@ -659,6 +678,7 @@ int velocityAnalysis(char * pdbpath, char * trjpath, char * velocitycsv, char * 
 						float velocity = sqrtf(((waters[currwater].x - newx) * (waters[currwater].x - newx)) +
 							((waters[currwater].y - newy) * (waters[currwater].y - newy)) +
 							((waters[currwater].z - newz) * (waters[currwater].z - newz))) / timespan;
+
 						avgvel[nearres[currwater]] += velocity;
 						++avginstances[nearres[currwater]];
 					}
@@ -667,15 +687,18 @@ int velocityAnalysis(char * pdbpath, char * trjpath, char * velocitycsv, char * 
 					waters[currwater].x = newx;
 					waters[currwater].y = newy;
 					waters[currwater].z = newz;
-					prevsimtime = xdr_time;
 				}
+					break;
+				case 'H': //Ignore hydrogen
 					break;
 				default:
 					printf("ERROR: Internal hbond lookup table is mangled somehow! (Found flag: %c)\n", atoms[i].hbondType);
 					return 1;
 				}
 			}
-
+			prevsimtime = xdr_time;
+			//fprintf(vellogger, "\n");
+			//fprintf(neilogger, "\n");
 			//For timing
 			auto t2 = std::chrono::high_resolution_clock::now();
 			auto elapsedtime = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
@@ -686,6 +709,9 @@ int velocityAnalysis(char * pdbpath, char * trjpath, char * velocitycsv, char * 
 		}
 		currentframe++;
 	} while (result_xdr == 0);
+
+	//fclose(vellogger);
+	//fclose(neilogger);
 
 	//Release the allocated memory to prevent a memory leak.
 	delete[] mindist;
@@ -700,7 +726,6 @@ int velocityAnalysis(char * pdbpath, char * trjpath, char * velocitycsv, char * 
 	vector<int> reslist;
 	for (int i = 0; i < numprotein; ++i)
 	{
-		reslist.size();
 		if (find(reslist.begin(), reslist.end(), protein[i].resid) == reslist.end())
 		{
 			reslist.push_back(protein[i].resid);
@@ -708,7 +733,7 @@ int velocityAnalysis(char * pdbpath, char * trjpath, char * velocitycsv, char * 
 	}
 	auto resvel = new float[reslist.size()];
 	fill(resvel, resvel + reslist.size(), -1.0f);
-	for (int i = 0; i < numwaters; ++i)
+	for (int i = 0; i < numprotein; ++i)
 	{
 		if (avginstances[i] != 0)
 		{
@@ -718,17 +743,24 @@ int velocityAnalysis(char * pdbpath, char * trjpath, char * velocitycsv, char * 
 	}
 
 	//Print residue velocities
+	FILE *avgvelloger;
+	avgvelloger = fopen(avgvelcsv, "w");
+	if (avgvelloger == NULL)
+	{
+		printf("Error: Average residue velocity log file could not be opened for writing.");
+		return 1;
+	}
+	fprintf(avgvelloger, "Res ID:,Velocity:,\n");
 	for (int i = 0; i < reslist.size(); ++i)
 	{
-
+		fprintf(avgvelloger, "%i,%f,\n", reslist[i], resvel[i]);
 	}
 
+	fclose(avgvelloger);
 	delete[] resvel;
 	delete[] nearres;
 	delete[] avgvel;
 	delete[] avginstances;
-	fclose(vellogger);
-	fclose(neilogger);
 
 	return 0;
 }

@@ -389,5 +389,10 @@ void PDBProcessor::getGPUHeavyProtWaterFromAtom(vector<Atom> & atoms, vector<GPU
 				protein.push_back(temp);
 			}
 		}
+		else
+		{
+			atoms[i].hbondType = 'H';
+			atoms[i].hbondListPos = 0;
+		}
 	}
 }

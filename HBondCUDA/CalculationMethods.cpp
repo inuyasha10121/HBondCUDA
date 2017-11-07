@@ -634,9 +634,3 @@ int neighborAnalysisLauncher(int * outNearID, float * outNearDist, GPUAtom * inW
 	}
 	return 0;
 }
-
-
-
-int velBasedAnalysis(char * pdbFile, char * trjFile, char * vellog, char * neighborlog, float veldistcutoff, int dt, float cudaMemPercentage, cudaDeviceProp deviceProp)
-{
-}

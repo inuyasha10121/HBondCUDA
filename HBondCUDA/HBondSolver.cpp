@@ -1,3 +1,4 @@
+#include <string>
 
 #include "AnalysisMethods.h"
 #include "helper_string.h"
@@ -106,7 +107,7 @@ int main(int argc, char **argv)
 	}
 
 
-	if (analysistype == "hbondrtimeline")
+	if (strcmp(analysistype , "hbondtimeline") == 0)
 	{
 		char * pdbpath;
 		char * hbondtablepath;
@@ -224,7 +225,7 @@ int main(int argc, char **argv)
 		}
 
 	}
-	else if (analysistype == "hbondanalysisonly")
+	else if (strcmp(analysistype, "hbondanalysisonly") == 0)
 	{
 		char * outpath;
 		char * csvpath;
@@ -303,7 +304,7 @@ int main(int argc, char **argv)
 		}
 		hbondTimelineAnalysis(outpath, csvpath, bridgerpath, hbondwindow, windowthreshold, dt, cudaMemPercentage, gpuid, deviceProp);
 	}
-	else if (analysistype == "velocity")
+	else if (strcmp(analysistype, "velocity") == 0)
 	{
 		char * pdbpath;
 		char * trajpath;
